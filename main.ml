@@ -245,13 +245,14 @@ and parse_cases s i len acc =
 
 and parse_factor_sequence s i len acc =
   let i, factor = parse_factor s i len in
+  let acc = factor :: acc in
   let i = skip_whitespace s i len in
   if i < len
   then (
     let c = s.[i] in
     match c with
-    | ')' | '=' | ';' | ':' | '|' -> i + 1, List.rev acc
-    | _ -> parse_factor_sequence s i len (factor :: acc))
+    | ')' | '=' | ';' | ':' | '|' -> i, List.rev acc
+    | _ -> parse_factor_sequence s i len acc)
   else i, List.rev acc
 
 and parse_expr s i len =
@@ -261,9 +262,63 @@ and parse_expr s i len =
 
 let parse_program s =
   let len = String.length s in
-  if Int.equal len 0
-  then errorfn "Program must consist of text, but it is empty."
-  else parse_factor s 0 len
+  let i, expr = parse_expr s 0 len in
+  if i < len
+  then errorfn "Finished parsing program before the end of the input text was reached."
+  else expr
+;;
+
+let rec format_expr buf expr =
+  match expr with
+  | Name name -> Buffer.add_string buf name
+  | Integer i -> Buffer.add_string buf (Int.to_string i)
+  | String s ->
+    Buffer.add_char buf '"';
+    Buffer.add_string buf s;
+    Buffer.add_char buf '"'
+  | Fun (args, body) ->
+    (match args with
+     | [] -> ()
+     | arg :: args ->
+       format_factor buf arg;
+       List.iter args ~f:(fun arg ->
+         Buffer.add_char buf ' ';
+         format_factor buf arg);
+       Buffer.add_string buf ": ");
+    format_expr buf body
+  | Let (pattern, expr, body) ->
+    Buffer.add_string buf "let ";
+    format_expr buf pattern;
+    Buffer.add_string buf " = ";
+    format_expr buf expr;
+    Buffer.add_string buf ";\n";
+    format_expr buf body
+  | Call (fun_, args) ->
+    format_factor buf fun_;
+    List.iter args ~f:(fun arg ->
+      Buffer.add_char buf ' ';
+      format_factor buf arg)
+  | Data (name, args) ->
+    Buffer.add_string buf name;
+    List.iter args ~f:(fun arg ->
+      Buffer.add_char buf ' ';
+      format_factor buf arg)
+  | Match (expr, cases) ->
+    Buffer.add_string buf "match ";
+    format_expr buf expr;
+    List.iter cases ~f:(fun (pattern, body) ->
+      Buffer.add_string buf "| ";
+      format_expr buf pattern;
+      Buffer.add_string buf ": ";
+      format_expr buf body)
+
+and format_factor buf expr =
+  match expr with
+  | Name _ | Integer _ | String _ -> format_expr buf expr
+  | Fun _ | Let _ | Call _ | Data _ | Match _ ->
+    Buffer.add_char buf '(';
+    format_expr buf expr;
+    Buffer.add_char buf ')'
 ;;
 
 let () =
@@ -271,6 +326,12 @@ let () =
   | 0 | 1 ->
     printfn "Usage: ./main.exe FILE";
     printfn "A program interpreter."
-  | 2 -> printfn "Running '%s'" Sys.argv.(1)
+  | 2 ->
+    let filename = Sys.argv.(1) in
+    let contents = In_channel.with_open_bin filename In_channel.input_all in
+    let parsed = parse_program contents in
+    let buf = Buffer.create 1024 in
+    let () = format_expr buf parsed in
+    printfn "%s" (Buffer.contents buf)
   | _ -> errorfn "Too many arguments. Usage: ./main.exe FILE"
 ;;
