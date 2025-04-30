@@ -124,6 +124,7 @@ type expr =
   | Data of string
   | Integer of int
   | String of string
+  | Char of char
   | Fun of expr list * expr
   | Let of expr * expr * expr
   | Seq of expr * expr
@@ -245,6 +246,22 @@ let rec parse_factor s i len =
       let i = skip_exact_char s i len ')' in
       i, expr
     | '_' -> i + 1, Wildcard
+    | '\'' ->
+      let i = i + 1 in
+      if i < len
+      then (
+        match s.[i] with
+        | '\'' ->
+          errorfn
+            (Loc (s, i))
+            "Character within single quotes must not itself be a single quote."
+        | c ->
+          let i = skip_exact_char s (i + 1) len '\'' in
+          i, Char c)
+      else
+        errorfn
+          (Loc (s, i))
+          "Expected character for character literal, but the program ended."
     | _ ->
       errorfn
         (Loc (s, i))
@@ -321,7 +338,35 @@ let parse_program s =
   else expr
 ;;
 
-let rec format_expr buf expr =
+let rec format_indent buf indent =
+  if indent > 0
+  then (
+    Buffer.add_char buf ' ';
+    format_indent buf (indent - 1))
+  else ()
+;;
+
+let rec is_multiline_expr expr =
+  match expr with
+  | Wildcard | Name _ | Integer _ | String _ | Char _ | Data _ -> false
+  | Let _ | Seq _ | Match _ -> true
+  | Fun (_, body) -> is_multiline_expr body
+  | Call (fun_, args) -> is_multiline_expr fun_ || List.exists args ~f:is_multiline_expr
+;;
+
+let space_or_newline_and_indent buf indent expr =
+  if is_multiline_expr expr
+  then (
+    let indent = indent + 2 in
+    Buffer.add_char buf '\n';
+    format_indent buf indent;
+    indent)
+  else (
+    Buffer.add_char buf ' ';
+    indent)
+;;
+
+let rec format_expr buf indent parent expr =
   match expr with
   | Wildcard -> Buffer.add_string buf "_"
   | Name name -> Buffer.add_string buf name
@@ -330,49 +375,72 @@ let rec format_expr buf expr =
     Buffer.add_char buf '"';
     Buffer.add_string buf s;
     Buffer.add_char buf '"'
+  | Char c ->
+    Buffer.add_char buf '\'';
+    Buffer.add_char buf c;
+    Buffer.add_char buf '\''
   | Fun (args, body) ->
-    (match args with
-     | [] -> ()
-     | arg :: args ->
-       format_factor buf arg;
-       List.iter args ~f:(fun arg ->
-         Buffer.add_char buf ' ';
-         format_factor buf arg);
-       Buffer.add_string buf ": ");
-    format_expr buf body
-  | Let (pattern, expr, body) ->
-    Buffer.add_string buf "let ";
-    format_expr buf pattern;
-    Buffer.add_string buf " = ";
-    format_expr buf expr;
-    Buffer.add_string buf ";\n";
-    format_expr buf body
-  | Seq (expr, next) ->
-    format_expr buf expr;
-    Buffer.add_string buf ";\n";
-    format_expr buf next
-  | Call (fun_, args) ->
-    format_factor buf fun_;
+    Buffer.add_string buf "fun";
     List.iter args ~f:(fun arg ->
       Buffer.add_char buf ' ';
-      format_factor buf arg)
+      format_factor buf indent `Non_match arg);
+    Buffer.add_string buf ":";
+    let indent = space_or_newline_and_indent buf indent expr in
+    format_expr buf indent `Non_match body
+  | Let (pattern, expr, body) ->
+    Buffer.add_string buf "let ";
+    format_expr buf indent `Non_match pattern;
+    Buffer.add_string buf " = ";
+    format_expr buf indent `Non_match expr;
+    Buffer.add_string buf ",\n";
+    format_indent buf indent;
+    format_expr buf indent parent body
+  | Seq (expr, next) ->
+    format_expr buf indent `Non_match expr;
+    Buffer.add_string buf ";\n";
+    format_indent buf indent;
+    format_expr buf indent `Non_match next
+  | Call (fun_, args) ->
+    format_factor buf indent `Non_match fun_;
+    List.iter args ~f:(fun arg ->
+      Buffer.add_char buf ' ';
+      format_factor buf indent `Non_match arg)
   | Data name -> Buffer.add_string buf name
   | Match (expr, cases) ->
+    let indent =
+      match parent with
+      | `Match ->
+        Buffer.add_char buf '(';
+        indent + 1
+      | `Non_match -> indent
+    in
     Buffer.add_string buf "match ";
-    format_expr buf expr;
+    format_expr buf indent `Match expr;
     List.iter cases ~f:(fun (patterns, body) ->
-      List.iter patterns ~f:(fun pattern ->
-        Buffer.add_string buf "| ";
-        format_expr buf pattern);
-      Buffer.add_string buf ": ";
-      format_expr buf body)
+      Buffer.add_char buf '\n';
+      format_indent buf indent;
+      (match patterns with
+       | hd :: tl ->
+         Buffer.add_string buf "| ";
+         format_expr buf indent `Match hd;
+         List.iter tl ~f:(fun pattern ->
+           Buffer.add_string buf " | ";
+           format_expr buf indent `Match pattern)
+       | [] -> errorfn Noloc "BUG: no patterns in case");
+      Buffer.add_string buf ":";
+      let indent = space_or_newline_and_indent buf indent body in
+      format_expr buf indent `Match body);
+    (match parent with
+     | `Match -> Buffer.add_char buf ')'
+     | `Non_match -> ())
 
-and format_factor buf expr =
+and format_factor buf indent parent expr =
   match expr with
-  | Wildcard | Name _ | Data _ | Integer _ | String _ -> format_expr buf expr
+  | Wildcard | Name _ | Data _ | Integer _ | String _ | Char _ ->
+    format_expr buf indent parent expr
   | Fun _ | Let _ | Seq _ | Call _ | Match _ ->
     Buffer.add_char buf '(';
-    format_expr buf expr;
+    format_expr buf indent `Non_match expr;
     Buffer.add_char buf ')'
 ;;
 
@@ -386,7 +454,7 @@ let () =
     let contents = In_channel.with_open_bin filename In_channel.input_all in
     let parsed = parse_program contents in
     let buf = Buffer.create 1024 in
-    let () = format_expr buf parsed in
+    let () = format_expr buf 0 `Non_match parsed in
     printfn "%s" (Buffer.contents buf)
   | _ -> errorfn Noloc "Too many arguments. Usage: ./main.exe FILE"
 ;;
