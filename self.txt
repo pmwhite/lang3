@@ -1,0 +1,12 @@
+match array_length argv
+| 0 | 1:
+  printfn "Usage: ./main.exe FILE";
+  printfn "A program interpreter"
+| 2:
+  let filename = array_get argv 1,
+  let contents = read_file filename,
+  let parsed = parse_program contents,
+  let buf = buffer_create U,
+  format_expr buf parsed;
+  printfn "%s" (buffer_contents buf)
+| _: errorfn "Too many arguments: Usage: ./main.exe FILE"
