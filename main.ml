@@ -3,6 +3,10 @@
      - Don't plan ahead; just go!
      - It doesn't matter what things are next to other things; just put stuff
      in the right dependency order (because you have to).
+
+   Todo:
+     - format strings
+     - evaluation
 *)
 
 open struct
@@ -106,15 +110,40 @@ let rec parse_rest_of_integer s i len acc =
   else i, acc
 ;;
 
-let rec parse_rest_of_string s i len buf =
+let rec parse_rest_of_string s i len closer syntax_buf value_buf =
   if i < len
   then (
     let c = s.[i] in
     match c with
-    | '"' -> i + 1, Buffer.contents buf
+    | _ when Char.equal c closer ->
+      i + 1, Buffer.contents syntax_buf, Buffer.contents value_buf
+    | '\\' ->
+      Buffer.add_char syntax_buf '\\';
+      let i = i + 1 in
+      if i < len
+      then (
+        let c = s.[i] in
+        Buffer.add_char syntax_buf c;
+        let value_char =
+          match c with
+          | 't' -> '\t'
+          | 'n' -> '\n'
+          | '\\' -> '\\'
+          | '{' -> '{'
+          | '"' -> '"'
+          | '\'' -> '\''
+          | _ -> errorfn (Loc (s, i)) "Expected an escapable character, but found '%c'." c
+        in
+        Buffer.add_char value_buf value_char;
+        parse_rest_of_string s (i + 1) len closer syntax_buf value_buf)
+      else
+        errorfn
+          (Loc (s, i))
+          "Expected an escapable character, but reached end of program."
     | _ ->
-      Buffer.add_char buf c;
-      parse_rest_of_string s (i + 1) len buf)
+      Buffer.add_char syntax_buf c;
+      Buffer.add_char value_buf c;
+      parse_rest_of_string s (i + 1) len closer syntax_buf value_buf)
   else errorfn (Loc (s, i)) "String literal left unfinished '\"'"
 ;;
 
@@ -123,8 +152,8 @@ type expr =
   | Name of string
   | Data of string
   | Integer of int
-  | String of string
-  | Char of char
+  | String of string * string
+  | Char of string * char
   | Fun of expr list * expr
   | Let of expr * expr * expr
   | Seq of expr * expr
@@ -238,30 +267,27 @@ let rec parse_factor s i len =
       let i, integer = parse_rest_of_integer s (i + 1) len initial in
       i, Integer integer
     | '"' ->
-      let buf = Buffer.create 128 in
-      let i, string = parse_rest_of_string s (i + 1) len buf in
-      i, String string
+      let syntax_buf = Buffer.create 128 in
+      let value_buf = Buffer.create 128 in
+      let i, syntax, value =
+        parse_rest_of_string s (i + 1) len '"' syntax_buf value_buf
+      in
+      i, String (syntax, value)
+    | '\'' ->
+      let syntax_buf = Buffer.create 128 in
+      let value_buf = Buffer.create 128 in
+      let i, syntax, value =
+        parse_rest_of_string s (i + 1) len '\'' syntax_buf value_buf
+      in
+      (match String.length value with
+       | 1 -> i, Char (syntax, value.[0])
+       | _ ->
+         errorfn (Loc (s, i)) "Character literal must only describe single character.")
     | '(' ->
       let i, expr = parse_expr s (i + 1) len in
       let i = skip_exact_char s i len ')' in
       i, expr
     | '_' -> i + 1, Wildcard
-    | '\'' ->
-      let i = i + 1 in
-      if i < len
-      then (
-        match s.[i] with
-        | '\'' ->
-          errorfn
-            (Loc (s, i))
-            "Character within single quotes must not itself be a single quote."
-        | c ->
-          let i = skip_exact_char s (i + 1) len '\'' in
-          i, Char c)
-      else
-        errorfn
-          (Loc (s, i))
-          "Expected character for character literal, but the program ended."
     | _ ->
       errorfn
         (Loc (s, i))
@@ -371,13 +397,13 @@ let rec format_expr buf indent parent expr =
   | Wildcard -> Buffer.add_string buf "_"
   | Name name -> Buffer.add_string buf name
   | Integer i -> Buffer.add_string buf (Int.to_string i)
-  | String s ->
+  | String (syntax, _value) ->
     Buffer.add_char buf '"';
-    Buffer.add_string buf s;
+    Buffer.add_string buf syntax;
     Buffer.add_char buf '"'
-  | Char c ->
+  | Char (syntax, _c) ->
     Buffer.add_char buf '\'';
-    Buffer.add_char buf c;
+    Buffer.add_string buf syntax;
     Buffer.add_char buf '\''
   | Fun (args, body) ->
     Buffer.add_string buf "fun";

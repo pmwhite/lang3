@@ -42,10 +42,18 @@ let parse_factor = fun s i len:
        let initial = int_sub (char_code c) (char_code '0'),
        let T i integer = parse_rest_of_integer s (int_add i 1) len initial,
        T i (Integer integer)
-     | '"':
-       let buf = buffer_create T,
-       let T i string = parse_rest_of_string s (int_add i 1) len buf,
-       T i (String string)
+    | '"':
+      let syntax_buf = buffer_create T,
+      let value_buf = buffer_create T,
+      let T i syntax value = parse_rest_of_string s (int_add i 1) len '"' syntax_buf value_buf,
+      T i (String syntax value)
+    | '\'':
+      let syntax_buf = buffer_create T,
+      let value_buf = buffer_create T,
+      let T i syntax value = parse_rest_of_string s (int_add i 1) len '"' syntax_buf value_buf,
+      (match string_length value
+       | 1: T i (Char syntax (string_get value 0))
+       | _: errorfn (Loc s i) "Character literal must only describe single character.")
      | '(':
        let T i expr = parse_expr s (int_add i 1) len,
        let i = skip_exact_char s i len ')',
