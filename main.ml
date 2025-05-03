@@ -7,6 +7,7 @@
    Todo:
      - format strings
      - evaluation
+     - add locations to expressions
 *)
 
 open struct
@@ -22,6 +23,8 @@ open struct
   module Bytes = BytesLabels
   module String = StringLabels
 end
+
+module String_map = Map.Make (String)
 
 let printfn fmt = Printf.ksprintf print_endline fmt
 let dbgfn fmt = Printf.ksprintf print_endline fmt
@@ -470,6 +473,113 @@ and format_factor buf indent parent expr =
     Buffer.add_char buf ')'
 ;;
 
+type value =
+  | Vdata of string
+  | Vinteger of int
+  | Vstring of string
+  | Vchar of char
+  | Vfun of expr list * expr
+  | Vcall of value * value list
+
+let rec evaluate_expr context expr =
+  match expr with
+  | Wildcard -> errorfn Noloc "ABORT: Wildcard expression used as value."
+  | Name name ->
+    (match String_map.find_opt name context with
+     | None -> errorfn Noloc "ABORT: Name '%s' is not defined." name
+     | Some value -> value)
+  | Data name -> Vdata name
+  | Integer i -> Vinteger i
+  | String (_syntax, value) -> Vstring value
+  | Char (_syntax, value) -> Vchar value
+  | Fun (args, body) -> Vfun (args, body)
+  | Let (pattern, expr, body) -> evaluate_match context expr [ [ pattern ], body ]
+  | Seq (a, b) -> evaluate_match context a [ [ Data "T" ], b ]
+  | Match (expr, cases) -> evaluate_match context expr cases
+  | Call (fun_, args) ->
+    let fun_ = evaluate_expr context fun_ in
+    let args = List.map args ~f:(fun arg -> evaluate_expr context arg) in
+    (match fun_ with
+     | Vdata _ -> Vcall (fun_, args)
+     | Vinteger _ -> errorfn Noloc "ABORT: Attempted to call an integer value."
+     | Vstring _ -> errorfn Noloc "ABORT: Attempted to call a string value."
+     | Vchar _ -> errorfn Noloc "ABORT: Attempted to call a char value."
+     | Vcall _ -> errorfn Noloc "ABORT: Attempted to call a call value."
+     | Vfun (arg_patterns, body) -> evaluate_call context arg_patterns args body)
+
+and evaluate_call context arg_patterns args body =
+  match arg_patterns with
+  | [] ->
+    (match args with
+     | [] -> evaluate_expr context body
+     | _ :: _ -> errorfn Noloc "ABORT: Too many arguments.")
+  | arg_pattern :: arg_patterns ->
+    (match args with
+     | [] -> errorfn Noloc "ABORT: Not enough args."
+     | arg :: args ->
+       (match evaluate_pattern context arg_pattern arg with
+        | None -> errorfn Noloc "ABORT: No patterns matched value."
+        | Some context -> evaluate_call context arg_patterns args body))
+
+and evaluate_match context expr cases =
+  let value = evaluate_expr context expr in
+  match
+    List.find_map cases ~f:(fun (patterns, body) ->
+      match
+        List.find_map patterns ~f:(fun pattern -> evaluate_pattern context pattern value)
+      with
+      | None -> None
+      | Some context -> Some (evaluate_expr context body))
+  with
+  | None -> errorfn Noloc "ABORT: No patterns matched value."
+  | Some value -> value
+
+and evaluate_call_patterns context arg_patterns args =
+  match arg_patterns with
+  | [] ->
+    (match args with
+     | [] -> Some context
+     | _ :: _ -> None)
+  | arg_pattern :: arg_patterns ->
+    (match args with
+     | [] -> None
+     | arg :: args ->
+       (match evaluate_pattern context arg_pattern arg with
+        | None -> None
+        | Some context -> evaluate_call_patterns context arg_patterns args))
+
+and evaluate_pattern context pattern value =
+  match pattern with
+  | Wildcard -> Some context
+  | Name name -> Some (String_map.add name value context)
+  | Data name ->
+    (match value with
+     | Vdata vname -> if String.equal name vname then None else Some context
+     | Vinteger _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ -> None)
+  | Integer i ->
+    (match value with
+     | Vinteger vi -> if Int.equal i vi then None else Some context
+     | Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ -> None)
+  | String (_syntax, string) ->
+    (match value with
+     | Vstring vstring -> if String.equal string vstring then None else Some context
+     | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ -> None)
+  | Char (_syntax, c) ->
+    (match value with
+     | Vchar vc -> if Char.equal c vc then None else Some context
+     | Vdata _ | Vinteger _ | Vstring _ | Vfun _ | Vcall _ -> None)
+  | Fun _ -> errorfn Noloc "ABORT: Attempted to use function expression as pattern."
+  | Let _ -> errorfn Noloc "ABORT: Attempted to use let expression as pattern."
+  | Seq _ ->
+    errorfn Noloc "ABORT: Attempted to use a sequence of two expressions as pattern."
+  | Call (fun_, args) ->
+    (match value with
+     | Vcall (vfun_, vargs) ->
+       evaluate_call_patterns context (fun_ :: args) (vfun_ :: vargs)
+     | Vdata _ | Vinteger _ | Vchar _ | Vstring _ | Vfun _ -> None)
+  | Match _ -> errorfn Noloc "ABORT: Attempted to use match expression as pattern."
+;;
+
 let () =
   match Array.length Sys.argv with
   | 0 | 1 ->
@@ -480,7 +590,7 @@ let () =
     let contents = In_channel.with_open_bin filename In_channel.input_all in
     let parsed = parse_program contents in
     let buf = Buffer.create 1024 in
-    let () = format_expr buf 0 `Non_match parsed in
+    format_expr buf 0 `Non_match parsed;
     printfn "%s" (Buffer.contents buf)
   | _ -> errorfn Noloc "Too many arguments. Usage: ./main.exe FILE"
 ;;
