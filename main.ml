@@ -6,7 +6,6 @@
 
    Todo:
      - format strings
-     - evaluation
      - add locations to expressions
 *)
 
@@ -481,6 +480,16 @@ type value =
   | Vfun of expr list * expr
   | Vcall of value * value list
 
+let rec value_to_expr value =
+  match value with
+  | Vdata name -> Data name
+  | Vinteger i -> Integer i
+  | Vstring s -> String (s, s)
+  | Vchar c -> Char (Printf.sprintf "%c" c, c)
+  | Vfun (args, body) -> Fun (args, body)
+  | Vcall (name, args) -> Call (value_to_expr name, List.map args ~f:value_to_expr)
+;;
+
 let rec evaluate_expr context expr =
   match expr with
   | Wildcard -> errorfn Noloc "ABORT: Wildcard expression used as value."
@@ -580,17 +589,55 @@ and evaluate_pattern context pattern value =
   | Match _ -> errorfn Noloc "ABORT: Attempted to use match expression as pattern."
 ;;
 
+let print_help () =
+  printfn "Commands:";
+  printfn "    check FILE         Ensure the validity of syntax in a file";
+  printfn "    format FILE        Reformat a file in place";
+  printfn "    run FILE           Run a file";
+  printfn "    repl               Start an interactive interpreter session"
+;;
+
 let () =
-  match Array.length Sys.argv with
-  | 0 | 1 ->
-    printfn "Usage: ./main.exe FILE";
-    printfn "A program interpreter."
-  | 2 ->
-    let filename = Sys.argv.(1) in
-    let contents = In_channel.with_open_bin filename In_channel.input_all in
-    let parsed = parse_program contents in
-    let buf = Buffer.create 1024 in
-    format_expr buf 0 `Non_match parsed;
-    printfn "%s" (Buffer.contents buf)
-  | _ -> errorfn Noloc "Too many arguments. Usage: ./main.exe FILE"
+  let num_args = Array.length Sys.argv in
+  if num_args < 2
+  then (
+    printfn "The Alpaca programming language.";
+    print_help ())
+  else (
+    let command = Sys.argv.(1) in
+    match command with
+    | "check" ->
+      (match num_args with
+       | 0 | 1 | 2 ->
+         printfn "Not enough arguments";
+         print_help ()
+       | 3 ->
+         let filename = Sys.argv.(2) in
+         let contents = In_channel.with_open_bin filename In_channel.input_all in
+         let parsed = parse_program contents in
+         let buf = Buffer.create 1024 in
+         format_expr buf 0 `Non_match parsed;
+         printfn "%s" (Buffer.contents buf)
+       | _ ->
+         printfn "Too many arguments";
+         print_help ())
+    | "repl" ->
+      (match num_args with
+       | 0 | 1 ->
+         printfn "Not enough arguments";
+         print_help ()
+       | 2 ->
+         while true do
+           Printf.printf "> %!";
+           let line = read_line () in
+           let parsed = parse_program line in
+           let value = evaluate_expr String_map.empty parsed in
+           let buf = Buffer.create 1024 in
+           format_expr buf 0 `Non_match (value_to_expr value);
+           printfn "%s" (Buffer.contents buf)
+         done
+       | _ ->
+         printfn "Too many arguments";
+         print_help ())
+    | _ -> errorfn Noloc "'%s' is not a recognized command." command)
 ;;
