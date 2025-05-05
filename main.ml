@@ -7,6 +7,7 @@
    Todo:
      - format strings
      - add locations to expressions
+     - unescape stuff when formatting
 *)
 
 open struct
@@ -150,17 +151,17 @@ let rec parse_rest_of_string s i len closer syntax_buf value_buf =
 ;;
 
 type expr =
-  | Wildcard
-  | Name of string
-  | Data of string
-  | Integer of int
-  | String of string * string
-  | Char of string * char
-  | Fun of expr list * expr
-  | Let of expr * expr * expr
-  | Seq of expr * expr
-  | Call of expr * expr list
-  | Match of expr * (expr list * expr) list
+  | Wildcard of loc
+  | Name of string * loc
+  | Data of string * loc
+  | Integer of int * loc
+  | String of string * string * loc
+  | Char of string * char * loc
+  | Fun of expr list * expr * loc
+  | Let of expr * expr * expr * loc
+  | Seq of expr * expr * loc
+  | Call of expr * expr list * loc
+  | Match of expr * (expr list * expr) list * loc
 
 let rec skip_whitespace s i len =
   if i < len
@@ -207,11 +208,11 @@ let rec parse_args s i len acc =
   else errorfn (Loc (s, i)) "Expected name, but the program ended."
 ;;
 
-let factors_to_expr factors =
+let factors_to_expr factors loc =
   match factors with
-  | [] -> errorfn Noloc "BUG: Empty list of factors."
+  | [] -> errorfn loc "BUG: Empty list of factors."
   | [ factor ] -> factor
-  | fun_ :: (_ :: _ as args) -> Call (fun_, args)
+  | fun_ :: (_ :: _ as args) -> Call (fun_, args, loc)
 ;;
 
 let skip_exact_char s i len char =
@@ -227,12 +228,13 @@ let skip_exact_char s i len char =
 let rec parse_factor s i len =
   if i < len
   then (
+    let loc = Loc (s, i) in
     let c = s.[i] in
     match c with
     | 'a' .. 'z' ->
       let i, symbol = parse_symbol_assume_first_char s i len in
       (match symbol with
-       | `Name name -> i, Name name
+       | `Name name -> i, Name (name, loc)
        | `Keyword_fun ->
          let i = skip_whitespace s i len in
          let i, args = parse_factor_sequence s i len [] in
@@ -240,7 +242,7 @@ let rec parse_factor s i len =
          let i = skip_exact_char s i len ':' in
          let i = skip_whitespace s i len in
          let i, body = parse_expr s i len in
-         i, Fun (args, body)
+         i, Fun (args, body, loc)
        | `Keyword_let ->
          let i = skip_whitespace s i len in
          let i, pattern = parse_expr s i len in
@@ -252,29 +254,29 @@ let rec parse_factor s i len =
          let i = skip_exact_char s i len ',' in
          let i = skip_whitespace s i len in
          let i, body = parse_expr s i len in
-         i, Let (pattern, expr, body)
+         i, Let (pattern, expr, body, loc)
        | `Keyword_match ->
          let i = skip_whitespace s i len in
          let i, expr = parse_expr s i len in
          let i = skip_whitespace s i len in
          let i, cases = parse_cases s i len [] in
-         i, Match (expr, cases))
+         i, Match (expr, cases, loc))
     | 'A' .. 'Z' ->
       let buf = Buffer.create 128 in
       Buffer.add_char buf c;
       let i, data_name = parse_rest_of_data_name s (i + 1) len buf in
-      i, Data data_name
+      i, Data (data_name, loc)
     | '0' .. '9' ->
       let initial = Char.code c - Char.code '0' in
       let i, integer = parse_rest_of_integer s (i + 1) len initial in
-      i, Integer integer
+      i, Integer (integer, loc)
     | '"' ->
       let syntax_buf = Buffer.create 128 in
       let value_buf = Buffer.create 128 in
       let i, syntax, value =
         parse_rest_of_string s (i + 1) len '"' syntax_buf value_buf
       in
-      i, String (syntax, value)
+      i, String (syntax, value, loc)
     | '\'' ->
       let syntax_buf = Buffer.create 128 in
       let value_buf = Buffer.create 128 in
@@ -282,14 +284,14 @@ let rec parse_factor s i len =
         parse_rest_of_string s (i + 1) len '\'' syntax_buf value_buf
       in
       (match String.length value with
-       | 1 -> i, Char (syntax, value.[0])
+       | 1 -> i, Char (syntax, value.[0], loc)
        | _ ->
          errorfn (Loc (s, i)) "Character literal must only describe single character.")
     | '(' ->
       let i, expr = parse_expr s (i + 1) len in
       let i = skip_exact_char s i len ')' in
       i, expr
-    | '_' -> i + 1, Wildcard
+    | '_' -> i + 1, Wildcard loc
     | _ ->
       errorfn
         (Loc (s, i))
@@ -339,8 +341,9 @@ and parse_factor_sequence s i len acc =
   else i, List.rev acc
 
 and parse_expr s i len =
+  let loc = Loc (s, i) in
   let i, factors = parse_factor_sequence s i len [] in
-  let expr = factors_to_expr factors in
+  let expr = factors_to_expr factors loc in
   let i = skip_whitespace s i len in
   if i < len
   then (
@@ -350,7 +353,7 @@ and parse_expr s i len =
       let i = i + 1 in
       let i = skip_whitespace s i len in
       let i, next = parse_expr s i len in
-      i, Seq (expr, next)
+      i, Seq (expr, next, loc)
     | _ -> i, expr)
   else i, expr
 ;;
@@ -376,10 +379,11 @@ let rec format_indent buf indent =
 
 let rec is_multiline_expr expr =
   match expr with
-  | Wildcard | Name _ | Integer _ | String _ | Char _ | Data _ -> false
+  | Wildcard _ | Name _ | Integer _ | String _ | Char _ | Data _ -> false
   | Let _ | Seq _ | Match _ -> true
-  | Fun (_, body) -> is_multiline_expr body
-  | Call (fun_, args) -> is_multiline_expr fun_ || List.exists args ~f:is_multiline_expr
+  | Fun (_, body, _) -> is_multiline_expr body
+  | Call (fun_, args, _) ->
+    is_multiline_expr fun_ || List.exists args ~f:is_multiline_expr
 ;;
 
 let space_or_newline_and_indent buf indent expr =
@@ -396,18 +400,18 @@ let space_or_newline_and_indent buf indent expr =
 
 let rec format_expr buf indent parent expr =
   match expr with
-  | Wildcard -> Buffer.add_string buf "_"
-  | Name name -> Buffer.add_string buf name
-  | Integer i -> Buffer.add_string buf (Int.to_string i)
-  | String (syntax, _value) ->
+  | Wildcard _ -> Buffer.add_string buf "_"
+  | Name (name, _) -> Buffer.add_string buf name
+  | Integer (i, _) -> Buffer.add_string buf (Int.to_string i)
+  | String (syntax, _value, _) ->
     Buffer.add_char buf '"';
     Buffer.add_string buf syntax;
     Buffer.add_char buf '"'
-  | Char (syntax, _c) ->
+  | Char (syntax, _c, _) ->
     Buffer.add_char buf '\'';
     Buffer.add_string buf syntax;
     Buffer.add_char buf '\''
-  | Fun (args, body) ->
+  | Fun (args, body, _) ->
     Buffer.add_string buf "fun";
     List.iter args ~f:(fun arg ->
       Buffer.add_char buf ' ';
@@ -415,7 +419,7 @@ let rec format_expr buf indent parent expr =
     Buffer.add_string buf ":";
     let indent = space_or_newline_and_indent buf indent expr in
     format_expr buf indent `Non_match body
-  | Let (pattern, expr, body) ->
+  | Let (pattern, expr, body, _) ->
     Buffer.add_string buf "let ";
     format_expr buf indent `Non_match pattern;
     Buffer.add_string buf " = ";
@@ -423,18 +427,18 @@ let rec format_expr buf indent parent expr =
     Buffer.add_string buf ",\n";
     format_indent buf indent;
     format_expr buf indent parent body
-  | Seq (expr, next) ->
+  | Seq (expr, next, _) ->
     format_expr buf indent `Non_match expr;
     Buffer.add_string buf ";\n";
     format_indent buf indent;
     format_expr buf indent `Non_match next
-  | Call (fun_, args) ->
+  | Call (fun_, args, _) ->
     format_factor buf indent `Non_match fun_;
     List.iter args ~f:(fun arg ->
       Buffer.add_char buf ' ';
       format_factor buf indent `Non_match arg)
-  | Data name -> Buffer.add_string buf name
-  | Match (expr, cases) ->
+  | Data (name, _) -> Buffer.add_string buf name
+  | Match (expr, cases, _) ->
     let indent =
       match parent with
       | `Match ->
@@ -464,7 +468,7 @@ let rec format_expr buf indent parent expr =
 
 and format_factor buf indent parent expr =
   match expr with
-  | Wildcard | Name _ | Data _ | Integer _ | String _ | Char _ ->
+  | Wildcard _ | Name _ | Data (_, _) | Integer _ | String _ | Char _ ->
     format_expr buf indent parent expr
   | Fun _ | Let _ | Seq _ | Call _ | Match _ ->
     Buffer.add_char buf '(';
@@ -482,38 +486,38 @@ type value =
 
 let rec value_to_expr value =
   match value with
-  | Vdata name -> Data name
-  | Vinteger i -> Integer i
-  | Vstring s -> String (s, s)
-  | Vchar c -> Char (Printf.sprintf "%c" c, c)
-  | Vfun (args, body) -> Fun (args, body)
-  | Vcall (name, args) -> Call (value_to_expr name, List.map args ~f:value_to_expr)
+  | Vdata name -> Data (name, Noloc)
+  | Vinteger i -> Integer (i, Noloc)
+  | Vstring s -> String (s, s, Noloc)
+  | Vchar c -> Char (Printf.sprintf "%c" c, c, Noloc)
+  | Vfun (args, body) -> Fun (args, body, Noloc)
+  | Vcall (name, args) -> Call (value_to_expr name, List.map args ~f:value_to_expr, Noloc)
 ;;
 
 let rec evaluate_expr context expr =
   match expr with
-  | Wildcard -> errorfn Noloc "ABORT: Wildcard expression used as value."
-  | Name name ->
+  | Wildcard loc -> errorfn loc "ABORT: Wildcard expression used as value."
+  | Name (name, loc) ->
     (match String_map.find_opt name context with
-     | None -> errorfn Noloc "ABORT: Name '%s' is not defined." name
+     | None -> errorfn loc "ABORT: Name '%s' is not defined." name
      | Some value -> value)
-  | Data name -> Vdata name
-  | Integer i -> Vinteger i
-  | String (_syntax, value) -> Vstring value
-  | Char (_syntax, value) -> Vchar value
-  | Fun (args, body) -> Vfun (args, body)
-  | Let (pattern, expr, body) -> evaluate_match context expr [ [ pattern ], body ]
-  | Seq (a, b) -> evaluate_match context a [ [ Data "T" ], b ]
-  | Match (expr, cases) -> evaluate_match context expr cases
-  | Call (fun_, args) ->
+  | Data (name, _) -> Vdata name
+  | Integer (i, _) -> Vinteger i
+  | String (_syntax, value, _) -> Vstring value
+  | Char (_syntax, value, _) -> Vchar value
+  | Fun (args, body, _) -> Vfun (args, body)
+  | Let (pattern, expr, body, _) -> evaluate_match context expr [ [ pattern ], body ]
+  | Seq (a, b, loc) -> evaluate_match context a [ [ Data ("T", loc) ], b ]
+  | Match (expr, cases, _) -> evaluate_match context expr cases
+  | Call (fun_, args, loc) ->
     let fun_ = evaluate_expr context fun_ in
     let args = List.map args ~f:(fun arg -> evaluate_expr context arg) in
     (match fun_ with
      | Vdata _ -> Vcall (fun_, args)
-     | Vinteger _ -> errorfn Noloc "ABORT: Attempted to call an integer value."
-     | Vstring _ -> errorfn Noloc "ABORT: Attempted to call a string value."
-     | Vchar _ -> errorfn Noloc "ABORT: Attempted to call a char value."
-     | Vcall _ -> errorfn Noloc "ABORT: Attempted to call a call value."
+     | Vinteger _ -> errorfn loc "ABORT: Attempted to call an integer value."
+     | Vstring _ -> errorfn loc "ABORT: Attempted to call a string value."
+     | Vchar _ -> errorfn loc "ABORT: Attempted to call a char value."
+     | Vcall _ -> errorfn loc "ABORT: Attempted to call a call value."
      | Vfun (arg_patterns, body) -> evaluate_call context arg_patterns args body)
 
 and evaluate_call context arg_patterns args body =
@@ -559,42 +563,45 @@ and evaluate_call_patterns context arg_patterns args =
 
 and evaluate_pattern context pattern value =
   match pattern with
-  | Wildcard -> Some context
-  | Name name -> Some (String_map.add name value context)
-  | Data name ->
+  | Wildcard _ -> Some context
+  | Name (name, _) -> Some (String_map.add name value context)
+  | Data (name, _) ->
     (match value with
      | Vdata vname -> if String.equal name vname then None else Some context
      | Vinteger _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ -> None)
-  | Integer i ->
+  | Integer (i, _) ->
     (match value with
      | Vinteger vi -> if Int.equal i vi then None else Some context
      | Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ -> None)
-  | String (_syntax, string) ->
+  | String (_syntax, string, _) ->
     (match value with
      | Vstring vstring -> if String.equal string vstring then None else Some context
      | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ -> None)
-  | Char (_syntax, c) ->
+  | Char (_syntax, c, _) ->
     (match value with
      | Vchar vc -> if Char.equal c vc then None else Some context
      | Vdata _ | Vinteger _ | Vstring _ | Vfun _ | Vcall _ -> None)
-  | Fun _ -> errorfn Noloc "ABORT: Attempted to use function expression as pattern."
-  | Let _ -> errorfn Noloc "ABORT: Attempted to use let expression as pattern."
-  | Seq _ ->
-    errorfn Noloc "ABORT: Attempted to use a sequence of two expressions as pattern."
-  | Call (fun_, args) ->
+  | Fun (_, _, loc) ->
+    errorfn loc "ABORT: Attempted to use function expression as pattern."
+  | Let (_, _, _, loc) -> errorfn loc "ABORT: Attempted to use let expression as pattern."
+  | Seq (_, _, loc) ->
+    errorfn loc "ABORT: Attempted to use a sequence of two expressions as pattern."
+  | Call (fun_, args, _) ->
     (match value with
      | Vcall (vfun_, vargs) ->
        evaluate_call_patterns context (fun_ :: args) (vfun_ :: vargs)
      | Vdata _ | Vinteger _ | Vchar _ | Vstring _ | Vfun _ -> None)
-  | Match _ -> errorfn Noloc "ABORT: Attempted to use match expression as pattern."
+  | Match (_, _, loc) ->
+    errorfn loc "ABORT: Attempted to use match expression as pattern."
 ;;
 
 let print_help () =
   printfn "Commands:";
-  printfn "    check FILE         Ensure the validity of syntax in a file";
-  printfn "    format FILE        Reformat a file in place";
-  printfn "    run FILE           Run a file";
-  printfn "    repl               Start an interactive interpreter session"
+  printfn "    check FILE            Ensure the validity of syntax in a file";
+  printfn "    format FILE           Print the formatted form of code in a file";
+  printfn "    format-in-place FILE  Modify a file's contents to be formatted";
+  printfn "    run FILE              Run a file";
+  printfn "    repl                  Start an interactive interpreter session"
 ;;
 
 let () =
@@ -606,7 +613,7 @@ let () =
   else (
     let command = Sys.argv.(1) in
     match command with
-    | "check" ->
+    | "format" ->
       (match num_args with
        | 0 | 1 | 2 ->
          printfn "Not enough arguments";
@@ -636,6 +643,22 @@ let () =
            format_expr buf 0 `Non_match (value_to_expr value);
            printfn "%s" (Buffer.contents buf)
          done
+       | _ ->
+         printfn "Too many arguments";
+         print_help ())
+    | "run" ->
+      (match num_args with
+       | 0 | 1 | 2 ->
+         printfn "Not enough arguments";
+         print_help ()
+       | 3 ->
+         let filename = Sys.argv.(2) in
+         let contents = In_channel.with_open_bin filename In_channel.input_all in
+         let parsed = parse_program contents in
+         let value = evaluate_expr String_map.empty parsed in
+         let buf = Buffer.create 1024 in
+         format_expr buf 0 `Non_match (value_to_expr value);
+         printfn "%s" (Buffer.contents buf)
        | _ ->
          printfn "Too many arguments";
          print_help ())
