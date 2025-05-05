@@ -6,7 +6,6 @@
 
    Todo:
      - format strings
-     - add locations to expressions
      - unescape stuff when formatting
 *)
 
@@ -483,7 +482,11 @@ type value =
   | Vchar of char
   | Vfun of expr list * expr
   | Vcall of value * value list
+  | Vbuiltin_fun of (value list -> value)
+  | Varray of value array
 
+(* Abstract values like arrays do not have equivalent expressions, so this
+   function cannot be trusted; it is mainly for debugging and printing purposes. *)
 let rec value_to_expr value =
   match value with
   | Vdata name -> Data (name, Noloc)
@@ -492,6 +495,61 @@ let rec value_to_expr value =
   | Vchar c -> Char (Printf.sprintf "%c" c, c, Noloc)
   | Vfun (args, body) -> Fun (args, body, Noloc)
   | Vcall (name, args) -> Call (value_to_expr name, List.map args ~f:value_to_expr, Noloc)
+  | Vbuiltin_fun _ -> Data ("Abstract_builtin_fun", Noloc)
+  | Varray _ -> Data ("Abstract_array", Noloc)
+;;
+
+let expect_arg args =
+  match args with
+  | [] -> errorfn Noloc "ABORT: Not enough args."
+  | arg :: args -> arg, args
+;;
+
+let expect_array args =
+  let arg, args = expect_arg args in
+  match arg with
+  | Vdata _ | Vinteger _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ ->
+    errorfn Noloc "ABORT: Expected array value."
+  | Varray array -> array, args
+;;
+
+let expect_string args =
+  let arg, args = expect_arg args in
+  match arg with
+  | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
+    errorfn Noloc "ABORT: Expected array value."
+  | Vstring value -> value, args
+;;
+
+let expect_no_more_args args =
+  match args with
+  | [] -> ()
+  | _ :: _ -> errorfn Noloc "ABORT: Too many args."
+;;
+
+let initial_context : value String_map.t =
+  String_map.of_list
+    [ ( "array_length"
+      , Vbuiltin_fun
+          (fun args ->
+            let array, args = expect_array args in
+            let () = expect_no_more_args args in
+            Vinteger (Array.length array)) )
+    ; "argv", Varray (Array.map Sys.argv ~f:(fun arg -> Vstring arg))
+    ; ( "print"
+      , Vbuiltin_fun
+          (fun args ->
+            let value, args = expect_string args in
+            let () = expect_no_more_args args in
+            Printf.printf "%s%!" value;
+            Vdata "T") )
+    ]
+;;
+
+let print_value value =
+  let buf = Buffer.create 1024 in
+  format_expr buf 0 `Non_match (value_to_expr value);
+  printfn "%s" (Buffer.contents buf)
 ;;
 
 let rec evaluate_expr context expr =
@@ -518,7 +576,9 @@ let rec evaluate_expr context expr =
      | Vstring _ -> errorfn loc "ABORT: Attempted to call a string value."
      | Vchar _ -> errorfn loc "ABORT: Attempted to call a char value."
      | Vcall _ -> errorfn loc "ABORT: Attempted to call a call value."
-     | Vfun (arg_patterns, body) -> evaluate_call context arg_patterns args body)
+     | Vfun (arg_patterns, body) -> evaluate_call context arg_patterns args body
+     | Vbuiltin_fun f -> f args
+     | Varray _ -> errorfn loc "ABORT: Attempted to call an array value.")
 
 and evaluate_call context arg_patterns args body =
   match arg_patterns with
@@ -566,21 +626,26 @@ and evaluate_pattern context pattern value =
   | Wildcard _ -> Some context
   | Name (name, _) -> Some (String_map.add name value context)
   | Data (name, _) ->
+    printfn "evaluate_pattern.Data(%s)" name;
     (match value with
-     | Vdata vname -> if String.equal name vname then None else Some context
-     | Vinteger _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ -> None)
+     | Vdata vname -> if String.equal name vname then Some context else None
+     | Vinteger _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
+       None)
   | Integer (i, _) ->
     (match value with
-     | Vinteger vi -> if Int.equal i vi then None else Some context
-     | Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ -> None)
+     | Vinteger vi -> if Int.equal i vi then Some context else None
+     | Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
+       None)
   | String (_syntax, string, _) ->
     (match value with
-     | Vstring vstring -> if String.equal string vstring then None else Some context
-     | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ -> None)
+     | Vstring vstring -> if String.equal string vstring then Some context else None
+     | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
+       None)
   | Char (_syntax, c, _) ->
     (match value with
-     | Vchar vc -> if Char.equal c vc then None else Some context
-     | Vdata _ | Vinteger _ | Vstring _ | Vfun _ | Vcall _ -> None)
+     | Vchar vc -> if Char.equal c vc then Some context else None
+     | Vdata _ | Vinteger _ | Vstring _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
+       None)
   | Fun (_, _, loc) ->
     errorfn loc "ABORT: Attempted to use function expression as pattern."
   | Let (_, _, _, loc) -> errorfn loc "ABORT: Attempted to use let expression as pattern."
@@ -590,7 +655,8 @@ and evaluate_pattern context pattern value =
     (match value with
      | Vcall (vfun_, vargs) ->
        evaluate_call_patterns context (fun_ :: args) (vfun_ :: vargs)
-     | Vdata _ | Vinteger _ | Vchar _ | Vstring _ | Vfun _ -> None)
+     | Vdata _ | Vinteger _ | Vchar _ | Vstring _ | Vfun _ | Vbuiltin_fun _ | Varray _ ->
+       None)
   | Match (_, _, loc) ->
     errorfn loc "ABORT: Attempted to use match expression as pattern."
 ;;
@@ -655,7 +721,7 @@ let () =
          let filename = Sys.argv.(2) in
          let contents = In_channel.with_open_bin filename In_channel.input_all in
          let parsed = parse_program contents in
-         let value = evaluate_expr String_map.empty parsed in
+         let value = evaluate_expr initial_context parsed in
          let buf = Buffer.create 1024 in
          format_expr buf 0 `Non_match (value_to_expr value);
          printfn "%s" (Buffer.contents buf)

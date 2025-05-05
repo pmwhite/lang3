@@ -64,13 +64,13 @@ let parse_factor = fun s i len:
   | False: todo,
 match array_length argv
 | 0 | 1:
-  printfn "Usage: ./main.exe FILE";
-  printfn "A program interpreter"
+  print "Usage: ./main.exe FILE";
+  print "A program interpreter"
 | 2:
   let filename = array_get argv 1,
   let contents = read_file filename,
   let parsed = parse_program contents,
   let buf = buffer_create T,
   format_expr buf parsed;
-  printfn "%s" (buffer_contents buf)
-| _: errorfn "Too many arguments: Usage: ./main.exe FILE"
+  print "%s" (buffer_contents buf)
+| _: errorln "Too many arguments: Usage: ./main.exe FILE"
