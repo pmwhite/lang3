@@ -1,2 +1,3 @@
-let world = "world",
+let x = 5,
+let world = "world";;
 print "hello, {world}\n"

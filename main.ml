@@ -65,13 +65,17 @@ let rec parse_rest_of_data_name s i len buf =
   else i, Buffer.contents buf
 ;;
 
-let rec line_and_column s acc_l acc_i goal_i =
+let rec line_and_column s acc_l prev_acc_i acc_i goal_i =
   match String.index_from_opt s acc_i '\n' with
-  | None -> acc_l, goal_i - acc_i + 1
+  | None ->
+    let line = String.sub ~pos:prev_acc_i ~len:(String.length s - prev_acc_i) s in
+    acc_l, goal_i - acc_i + 1, line
   | Some i ->
     if i < goal_i
-    then line_and_column s (acc_l + 1) (i + 1) goal_i
-    else acc_l, goal_i - acc_i + 1
+    then line_and_column s (acc_l + 1) acc_i (i + 1) goal_i
+    else (
+      let line = String.sub ~pos:prev_acc_i ~len:(i - prev_acc_i) s in
+      acc_l, goal_i - acc_i + 1, line)
 ;;
 
 type loc =
@@ -79,18 +83,24 @@ type loc =
   | Loc of string * int
 
 let errorfn loc fmt =
-  let loc =
-    match loc with
-    | Noloc -> ""
-    | Loc (s, i) ->
-      let line, column = line_and_column s 1 0 i in
-      Printf.sprintf "%d:%d " line column
-  in
-  Printf.ksprintf
-    (fun s ->
-       Printf.eprintf "%s%s\n" loc s;
-       exit 1)
-    fmt
+  match loc with
+  | Noloc ->
+    Printf.ksprintf
+      (fun s ->
+         Printf.eprintf "%s\n" s;
+         exit 1)
+      fmt
+  | Loc (s, i) ->
+    let lnum, cnum, line = line_and_column s 1 0 0 i in
+    let lines = String.split_on_char ~sep:'\n' line in
+    Printf.ksprintf
+      (fun s ->
+         Printf.eprintf "%d:%d %s\n" lnum cnum s;
+         List.iter lines ~f:(fun line -> Printf.eprintf "| %s\n" line);
+         let indent = String.make cnum '-' in
+         Printf.eprintf "\\%s^\n" indent;
+         exit 1)
+      fmt
 ;;
 
 let rec parse_rest_of_integer s i len acc =
