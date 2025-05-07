@@ -5,8 +5,7 @@
      in the right dependency order (because you have to).
 
    Todo:
-     - format strings
-     - unescape stuff when formatting
+     - location ranges
 *)
 
 open struct
@@ -112,41 +111,43 @@ let rec parse_rest_of_integer s i len acc =
   else i, acc
 ;;
 
-let rec parse_rest_of_string s i len closer syntax_buf value_buf =
-  if i < len
-  then (
-    let c = s.[i] in
-    match c with
-    | _ when Char.equal c closer ->
-      i + 1, Buffer.contents syntax_buf, Buffer.contents value_buf
-    | '\\' ->
-      Buffer.add_char syntax_buf '\\';
-      let i = i + 1 in
-      if i < len
-      then (
-        let c = s.[i] in
-        Buffer.add_char syntax_buf c;
-        let value_char =
-          match c with
-          | 't' -> '\t'
-          | 'n' -> '\n'
-          | '\\' -> '\\'
-          | '{' -> '{'
-          | '"' -> '"'
-          | '\'' -> '\''
-          | _ -> errorfn (Loc (s, i)) "Expected an escapable character, but found '%c'." c
-        in
-        Buffer.add_char value_buf value_char;
-        parse_rest_of_string s (i + 1) len closer syntax_buf value_buf)
-      else
-        errorfn
-          (Loc (s, i))
-          "Expected an escapable character, but reached end of program."
-    | _ ->
-      Buffer.add_char syntax_buf c;
-      Buffer.add_char value_buf c;
-      parse_rest_of_string s (i + 1) len closer syntax_buf value_buf)
-  else errorfn (Loc (s, i)) "String literal left unfinished '\"'"
+let parse_string_section s i len closer =
+  let rec iter s i len closer buf =
+    if i < len
+    then (
+      let c = s.[i] in
+      match c with
+      | _ when Char.equal c closer -> i + 1, Buffer.contents buf, `Done
+      | '{' -> i + 1, Buffer.contents buf, `Keep_going
+      | '\\' ->
+        let i = i + 1 in
+        if i < len
+        then (
+          let c = s.[i] in
+          let value_char =
+            match c with
+            | 't' -> '\t'
+            | 'n' -> '\n'
+            | '\\' -> '\\'
+            | '{' -> '{'
+            | '"' -> '"'
+            | '\'' -> '\''
+            | _ ->
+              errorfn (Loc (s, i)) "Expected an escapable character, but found '%c'." c
+          in
+          Buffer.add_char buf value_char;
+          iter s (i + 1) len closer buf)
+        else
+          errorfn
+            (Loc (s, i))
+            "Expected an escapable character, but reached end of program."
+      | _ ->
+        Buffer.add_char buf c;
+        iter s (i + 1) len closer buf)
+    else errorfn (Loc (s, i)) "String literal left unfinished '\"'"
+  in
+  let buf = Buffer.create 128 in
+  iter s i len closer buf
 ;;
 
 type expr =
@@ -154,13 +155,27 @@ type expr =
   | Name of string * loc
   | Data of string * loc
   | Integer of int * loc
-  | String of string * string * loc
-  | Char of string * char * loc
+  | String of string * (expr * string) list * loc
+  | Char of char * loc
   | Fun of expr list * expr * loc
   | Let of expr * expr * expr * loc
   | Seq of expr * expr * loc
   | Call of expr * expr list * loc
   | Match of expr * (expr list * expr) list * loc
+
+let loc_of_expr = function
+  | Wildcard loc
+  | Name (_, loc)
+  | Data (_, loc)
+  | Integer (_, loc)
+  | String (_, _, loc)
+  | Char (_, loc)
+  | Fun (_, _, loc)
+  | Let (_, _, _, loc)
+  | Seq (_, _, loc)
+  | Call (_, _, loc)
+  | Match (_, _, loc) -> loc
+;;
 
 let rec skip_whitespace s i len =
   if i < len
@@ -225,9 +240,9 @@ let skip_exact_char s i len char =
 ;;
 
 let rec parse_factor s i len =
+  let loc = Loc (s, i) in
   if i < len
   then (
-    let loc = Loc (s, i) in
     let c = s.[i] in
     match c with
     | 'a' .. 'z' ->
@@ -270,22 +285,17 @@ let rec parse_factor s i len =
       let i, integer = parse_rest_of_integer s (i + 1) len initial in
       i, Integer (integer, loc)
     | '"' ->
-      let syntax_buf = Buffer.create 128 in
-      let value_buf = Buffer.create 128 in
-      let i, syntax, value =
-        parse_rest_of_string s (i + 1) len '"' syntax_buf value_buf
-      in
-      i, String (syntax, value, loc)
+      let i, section, sections = parse_string_sections s (i + 1) len '"' in
+      i, String (section, sections, loc)
     | '\'' ->
-      let syntax_buf = Buffer.create 128 in
-      let value_buf = Buffer.create 128 in
-      let i, syntax, value =
-        parse_rest_of_string s (i + 1) len '\'' syntax_buf value_buf
-      in
-      (match String.length value with
-       | 1 -> i, Char (syntax, value.[0], loc)
-       | _ ->
-         errorfn (Loc (s, i)) "Character literal must only describe single character.")
+      let i, section, sections = parse_string_sections s (i + 1) len '\'' in
+      (match sections with
+       | [] ->
+         (match String.length section with
+          | 1 -> i, Char (section.[0], loc)
+          | _ -> errorfn loc "Character literal must only describe single character.")
+       | _ :: _ ->
+         errorfn loc "Character literal must not contain any interpolated expressions.")
     | '(' ->
       let i, expr = parse_expr s (i + 1) len in
       let i = skip_exact_char s i len ')' in
@@ -293,11 +303,11 @@ let rec parse_factor s i len =
     | '_' -> i + 1, Wildcard loc
     | _ ->
       errorfn
-        (Loc (s, i))
+        loc
         "Expected to find the beginning of an expression, but found an unexpected \
          character '%c' instead."
         c)
-  else errorfn (Loc (s, i)) "Expected to find an expression, but the program ended."
+  else errorfn loc "Expected to find an expression, but the program ended."
 
 and parse_patterns s i len acc =
   if i < len
@@ -335,7 +345,7 @@ and parse_factor_sequence s i len acc =
   then (
     let c = s.[i] in
     match c with
-    | ')' | '=' | ';' | ':' | '|' | ',' -> i, List.rev acc
+    | ')' | '=' | ';' | ':' | '|' | ',' | '}' -> i, List.rev acc
     | _ -> parse_factor_sequence s i len acc)
   else i, List.rev acc
 
@@ -355,6 +365,20 @@ and parse_expr s i len =
       i, Seq (expr, next, loc)
     | _ -> i, expr)
   else i, expr
+
+and parse_rest_of_sections s i len closer next acc =
+  match next with
+  | `Done -> i, List.rev acc
+  | `Keep_going ->
+    let i, expr = parse_expr s i len in
+    let i = skip_exact_char s i len '}' in
+    let i, section, next = parse_string_section s i len closer in
+    parse_rest_of_sections s i len closer next ((expr, section) :: acc)
+
+and parse_string_sections s i len closer =
+  let i, section, next = parse_string_section s i len closer in
+  let i, sections = parse_rest_of_sections s i len closer next [] in
+  i, section, sections
 ;;
 
 let parse_program s =
@@ -397,18 +421,36 @@ let space_or_newline_and_indent buf indent expr =
     indent)
 ;;
 
+let format_char_contents buf c =
+  match c with
+  | '\t' -> Buffer.add_string buf "\\t"
+  | '\n' -> Buffer.add_string buf "\\n"
+  | '\\' -> Buffer.add_string buf "\\\\"
+  | '{' -> Buffer.add_string buf "\\{"
+  | '"' -> Buffer.add_string buf "\\\""
+  | '\'' -> Buffer.add_string buf "\\\'"
+  | c -> Buffer.add_char buf c
+;;
+
+let format_string_contents buf s = String.iter s ~f:(format_char_contents buf)
+
 let rec format_expr buf indent parent expr =
   match expr with
   | Wildcard _ -> Buffer.add_string buf "_"
   | Name (name, _) -> Buffer.add_string buf name
   | Integer (i, _) -> Buffer.add_string buf (Int.to_string i)
-  | String (syntax, _value, _) ->
+  | String (section, sections, _) ->
     Buffer.add_char buf '"';
-    Buffer.add_string buf syntax;
+    format_string_contents buf section;
+    List.iter sections ~f:(fun (expr, section) ->
+      Buffer.add_char buf '{';
+      format_expr buf indent `Non_match expr;
+      Buffer.add_char buf '}';
+      format_string_contents buf section);
     Buffer.add_char buf '"'
-  | Char (syntax, _c, _) ->
+  | Char (c, _) ->
     Buffer.add_char buf '\'';
-    Buffer.add_string buf syntax;
+    format_char_contents buf c;
     Buffer.add_char buf '\''
   | Fun (args, body, _) ->
     Buffer.add_string buf "fun";
@@ -491,8 +533,8 @@ let rec value_to_expr value =
   match value with
   | Vdata name -> Data (name, Noloc)
   | Vinteger i -> Integer (i, Noloc)
-  | Vstring s -> String (s, s, Noloc)
-  | Vchar c -> Char (Printf.sprintf "%c" c, c, Noloc)
+  | Vstring s -> String (s, [], Noloc)
+  | Vchar c -> Char (c, Noloc)
   | Vfun (args, body) -> Fun (args, body, Noloc)
   | Vcall (name, args) -> Call (value_to_expr name, List.map args ~f:value_to_expr, Noloc)
   | Vbuiltin_fun _ -> Data ("Abstract_builtin_fun", Noloc)
@@ -561,8 +603,21 @@ let rec evaluate_expr context expr =
      | Some value -> value)
   | Data (name, _) -> Vdata name
   | Integer (i, _) -> Vinteger i
-  | String (_syntax, value, _) -> Vstring value
-  | Char (_syntax, value, _) -> Vchar value
+  | String (section, sections, _) ->
+    let buf = Buffer.create (String.length section) in
+    Buffer.add_string buf section;
+    List.iter sections ~f:(fun (expr, section) ->
+      let value = evaluate_expr context expr in
+      (match value with
+       | Vstring s -> Buffer.add_string buf s
+       | Vdata _ | Vinteger _ | Vchar _
+       | Vfun (_, _)
+       | Vcall (_, _)
+       | Vbuiltin_fun _ | Varray _ ->
+         errorfn (loc_of_expr expr) "ABORT: Attempted to interpolate a non-string value.");
+      Buffer.add_string buf section);
+    Vstring (Buffer.contents buf)
+  | Char (value, _) -> Vchar value
   | Fun (args, body, _) -> Vfun (args, body)
   | Let (pattern, expr, body, _) -> evaluate_match context expr [ [ pattern ], body ]
   | Seq (a, b, loc) -> evaluate_match context a [ [ Data ("T", loc) ], b ]
@@ -636,12 +691,15 @@ and evaluate_pattern context pattern value =
      | Vinteger vi -> if Int.equal i vi then Some context else None
      | Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
        None)
-  | String (_syntax, string, _) ->
-    (match value with
-     | Vstring vstring -> if String.equal string vstring then Some context else None
-     | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
-       None)
-  | Char (_syntax, c, _) ->
+  | String (string, sections, loc) ->
+    (match sections with
+     | [] ->
+       (match value with
+        | Vstring vstring -> if String.equal string vstring then Some context else None
+        | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
+          None)
+     | _ :: _ -> errorfn loc "ABORT: Attempted to use interpolated string as pattern.")
+  | Char (c, _) ->
     (match value with
      | Vchar vc -> if Char.equal c vc then Some context else None
      | Vdata _ | Vinteger _ | Vstring _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
