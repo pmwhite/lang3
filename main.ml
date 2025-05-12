@@ -68,14 +68,16 @@ let rec parse_rest_of_data_name s i len buf =
 let rec line_and_column s acc_l prev_acc_i acc_i goal_i =
   match String.index_from_opt s acc_i '\n' with
   | None ->
-    let line = String.sub ~pos:prev_acc_i ~len:(String.length s - prev_acc_i) s in
-    acc_l, goal_i - acc_i + 1, line
+    let excerpt = String.sub ~pos:prev_acc_i ~len:(String.length s - prev_acc_i) s in
+    let line = String.sub ~pos:acc_i ~len:(String.length s - acc_i) s in
+    acc_l, goal_i - acc_i + 1, excerpt, line
   | Some i ->
     if i < goal_i
     then line_and_column s (acc_l + 1) acc_i (i + 1) goal_i
     else (
-      let line = String.sub ~pos:prev_acc_i ~len:(i - prev_acc_i) s in
-      acc_l, goal_i - acc_i + 1, line)
+      let excerpt = String.sub ~pos:prev_acc_i ~len:(i - prev_acc_i) s in
+      let line = String.sub ~pos:acc_i ~len:(i - acc_i) s in
+      acc_l, goal_i - acc_i + 1, excerpt, line)
 ;;
 
 type loc =
@@ -91,17 +93,24 @@ let errorfn loc fmt =
          exit 1)
       fmt
   | Loc (s, i) ->
-    let lnum, cnum, line = line_and_column s 1 0 0 i in
-    let lines = String.split_on_char ~sep:'\n' line in
+    let lnum, cnum, excerpt, line = line_and_column s 1 0 0 i in
+    let excerpt_lines = String.split_on_char ~sep:'\n' excerpt in
     Printf.ksprintf
       (fun s ->
          Printf.eprintf "%d:%d %s\n" lnum cnum s;
-         List.iter lines ~f:(fun line -> Printf.eprintf "| %s\n" line);
+         List.iter excerpt_lines ~f:(fun line -> Printf.eprintf "| %s\n" line);
          let indent = String.make cnum '-' in
          Printf.eprintf "\\%s^\n" indent;
+         let begin_ = max (cnum - 4) 0 in
+         let end_ = min (cnum + 4) (String.length line) in
+         Printf.eprintf
+           "Specifically this part: `%s`\n"
+           (String.sub line ~pos:begin_ ~len:(end_ - begin_));
          exit 1)
       fmt
 ;;
+
+let abortfn loc fmt = Printf.ksprintf (errorfn loc "ABORT: %s") fmt
 
 let rec parse_rest_of_integer s i len acc =
   if i < len
@@ -553,7 +562,7 @@ let rec value_to_expr value =
 
 let expect_arg args =
   match args with
-  | [] -> errorfn Noloc "ABORT: Not enough args."
+  | [] -> abortfn Noloc "Not enough args."
   | arg :: args -> arg, args
 ;;
 
@@ -561,25 +570,33 @@ let expect_array args =
   let arg, args = expect_arg args in
   match arg with
   | Vdata _ | Vinteger _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ ->
-    errorfn Noloc "ABORT: Expected array value."
+    abortfn Noloc "Expected array value."
   | Varray array -> array, args
+;;
+
+let expect_int args =
+  let arg, args = expect_arg args in
+  match arg with
+  | Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
+    abortfn Noloc "Expected int value."
+  | Vinteger int -> int, args
 ;;
 
 let expect_string args =
   let arg, args = expect_arg args in
   match arg with
   | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
-    errorfn Noloc "ABORT: Expected array value."
+    abortfn Noloc "Expected array value."
   | Vstring value -> value, args
 ;;
 
 let expect_no_more_args args =
   match args with
   | [] -> ()
-  | _ :: _ -> errorfn Noloc "ABORT: Too many args."
+  | _ :: _ -> abortfn Noloc "Too many args."
 ;;
 
-let initial_context : value String_map.t =
+let initial_context argv : value String_map.t =
   String_map.of_list
     [ ( "array_length"
       , Vbuiltin_fun
@@ -587,7 +604,14 @@ let initial_context : value String_map.t =
             let array, args = expect_array args in
             let () = expect_no_more_args args in
             Vinteger (Array.length array)) )
-    ; "argv", Varray (Array.map Sys.argv ~f:(fun arg -> Vstring arg))
+    ; ( "array_get"
+      , Vbuiltin_fun
+          (fun args ->
+            let array, args = expect_array args in
+            let index, args = expect_int args in
+            let () = expect_no_more_args args in
+            array.(index)) )
+    ; "argv", Varray (Array.map argv ~f:(fun arg -> Vstring arg))
     ; ( "print"
       , Vbuiltin_fun
           (fun args ->
@@ -595,6 +619,18 @@ let initial_context : value String_map.t =
             let () = expect_no_more_args args in
             Printf.printf "%s%!" value;
             Vdata "T") )
+    ; ( "abort"
+      , Vbuiltin_fun
+          (fun args ->
+            let value, args = expect_string args in
+            let () = expect_no_more_args args in
+            errorfn Noloc "%s" value) )
+    ; ( "read_file"
+      , Vbuiltin_fun
+          (fun args ->
+            let value, args = expect_string args in
+            let () = expect_no_more_args args in
+            Vstring (In_channel.with_open_bin value In_channel.input_all)) )
     ]
 ;;
 
@@ -606,10 +642,10 @@ let print_value value =
 
 let rec evaluate_expr context expr =
   match expr with
-  | Wildcard loc -> errorfn loc "ABORT: Wildcard expression used as value."
+  | Wildcard loc -> abortfn loc "Wildcard expression used as value."
   | Name (name, loc) ->
     (match String_map.find_opt name context with
-     | None -> errorfn loc "ABORT: Name '%s' is not defined." name
+     | None -> abortfn loc "Name '%s' is not defined." name
      | Some value -> value)
   | Data (name, _) -> Vdata name
   | Integer (i, _) -> Vinteger i
@@ -624,7 +660,8 @@ let rec evaluate_expr context expr =
        | Vfun (_, _)
        | Vcall (_, _)
        | Vbuiltin_fun _ | Varray _ ->
-         errorfn (loc_of_expr expr) "ABORT: Attempted to interpolate a non-string value.");
+         let loc = loc_of_expr expr in
+         abortfn loc "Attempted to interpolate a non-string value.");
       Buffer.add_string buf section);
     Vstring (Buffer.contents buf)
   | Char (value, _) -> Vchar value
@@ -637,26 +674,26 @@ let rec evaluate_expr context expr =
     let args = List.map args ~f:(fun arg -> evaluate_expr context arg) in
     (match fun_ with
      | Vdata _ -> Vcall (fun_, args)
-     | Vinteger _ -> errorfn loc "ABORT: Attempted to call an integer value."
-     | Vstring _ -> errorfn loc "ABORT: Attempted to call a string value."
-     | Vchar _ -> errorfn loc "ABORT: Attempted to call a char value."
-     | Vcall _ -> errorfn loc "ABORT: Attempted to call a call value."
+     | Vinteger _ -> abortfn loc "Attempted to call an integer value."
+     | Vstring _ -> abortfn loc "Attempted to call a string value."
+     | Vchar _ -> abortfn loc "Attempted to call a char value."
+     | Vcall _ -> abortfn loc "Attempted to call a call value."
      | Vfun (arg_patterns, body) -> evaluate_call context arg_patterns args body
      | Vbuiltin_fun f -> f args
-     | Varray _ -> errorfn loc "ABORT: Attempted to call an array value.")
+     | Varray _ -> abortfn loc "Attempted to call an array value.")
 
 and evaluate_call context arg_patterns args body =
   match arg_patterns with
   | [] ->
     (match args with
      | [] -> evaluate_expr context body
-     | _ :: _ -> errorfn Noloc "ABORT: Too many arguments.")
+     | _ :: _ -> abortfn Noloc "Too many arguments.")
   | arg_pattern :: arg_patterns ->
     (match args with
-     | [] -> errorfn Noloc "ABORT: Not enough args."
+     | [] -> abortfn Noloc "Not enough args."
      | arg :: args ->
        (match evaluate_pattern context arg_pattern arg with
-        | None -> errorfn Noloc "ABORT: No patterns matched value."
+        | None -> abortfn Noloc "No patterns matched value."
         | Some context -> evaluate_call context arg_patterns args body))
 
 and evaluate_match context expr cases =
@@ -669,7 +706,7 @@ and evaluate_match context expr cases =
       | None -> None
       | Some context -> Some (evaluate_expr context body))
   with
-  | None -> errorfn Noloc "ABORT: No patterns matched value."
+  | None -> abortfn Noloc "No patterns matched value."
   | Some value -> value
 
 and evaluate_call_patterns context arg_patterns args =
@@ -691,7 +728,6 @@ and evaluate_pattern context pattern value =
   | Wildcard _ -> Some context
   | Name (name, _) -> Some (String_map.add name value context)
   | Data (name, _) ->
-    printfn "evaluate_pattern.Data(%s)" name;
     (match value with
      | Vdata vname -> if String.equal name vname then Some context else None
      | Vinteger _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
@@ -708,32 +744,28 @@ and evaluate_pattern context pattern value =
         | Vstring vstring -> if String.equal string vstring then Some context else None
         | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
           None)
-     | _ :: _ -> errorfn loc "ABORT: Attempted to use interpolated string as pattern.")
+     | _ :: _ -> abortfn loc "Attempted to use interpolated string as pattern.")
   | Char (c, _) ->
     (match value with
      | Vchar vc -> if Char.equal c vc then Some context else None
      | Vdata _ | Vinteger _ | Vstring _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
        None)
-  | Fun (_, _, loc) ->
-    errorfn loc "ABORT: Attempted to use function expression as pattern."
-  | Let (_, _, _, loc) -> errorfn loc "ABORT: Attempted to use let expression as pattern."
+  | Fun (_, _, loc) -> abortfn loc "Attempted to use function expression as pattern."
+  | Let (_, _, _, loc) -> abortfn loc "Attempted to use let expression as pattern."
   | Seq (_, _, loc) ->
-    errorfn loc "ABORT: Attempted to use a sequence of two expressions as pattern."
+    abortfn loc "Attempted to use a sequence of two expressions as pattern."
   | Call (fun_, args, _) ->
     (match value with
      | Vcall (vfun_, vargs) ->
        evaluate_call_patterns context (fun_ :: args) (vfun_ :: vargs)
      | Vdata _ | Vinteger _ | Vchar _ | Vstring _ | Vfun _ | Vbuiltin_fun _ | Varray _ ->
        None)
-  | Match (_, _, loc) ->
-    errorfn loc "ABORT: Attempted to use match expression as pattern."
+  | Match (_, _, loc) -> abortfn loc "Attempted to use match expression as pattern."
 ;;
 
 let print_help () =
   printfn "Commands:";
-  printfn "    check FILE            Ensure the validity of syntax in a file";
   printfn "    format FILE           Print the formatted form of code in a file";
-  printfn "    format-in-place FILE  Modify a file's contents to be formatted";
   printfn "    run FILE              Run a file";
   printfn "    repl                  Start an interactive interpreter session"
 ;;
@@ -789,10 +821,9 @@ let () =
          let filename = Sys.argv.(2) in
          let contents = In_channel.with_open_bin filename In_channel.input_all in
          let parsed = parse_program contents in
-         let value = evaluate_expr initial_context parsed in
-         let buf = Buffer.create 1024 in
-         format_expr buf 0 `Non_match (value_to_expr value);
-         printfn "%s" (Buffer.contents buf)
+         let context = initial_context (Array.sub Sys.argv ~pos:2 ~len:(num_args - 2)) in
+         let (_ : value) = evaluate_expr context parsed in
+         ()
        | _ ->
          printfn "Too many arguments";
          print_help ())
