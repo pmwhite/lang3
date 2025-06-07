@@ -6,6 +6,9 @@
 
    Todo:
      - location ranges
+     - namespacing and toplevel declarations
+     - program introspection commands
+     - ai edit loop wrapper
 *)
 
 open struct
