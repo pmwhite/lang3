@@ -185,6 +185,8 @@ type expr =
   | Call of expr * expr list * loc
   | Match of expr * (expr list * expr) list * loc
 
+type program = (string * expr) list
+
 let loc_of_expr = function
   | Wildcard loc
   | Name (_, loc)
@@ -225,6 +227,14 @@ let parse_symbol s i len =
   else errorfn (Loc (s, i)) "Expected symbol, but reached end of program."
 ;;
 
+let expect_name_of_symbol s i symbol =
+  match symbol with
+  | `Name name -> name
+  | `Keyword_fun -> errorfn (Loc (s, i)) "Expected name, but got keyword 'fun'."
+  | `Keyword_let -> errorfn (Loc (s, i)) "Expected name, but got keyword 'let'."
+  | `Keyword_match -> errorfn (Loc (s, i)) "Expected name, but got keyword 'match."
+;;
+
 let rec parse_args s i len acc =
   if i < len
   then (
@@ -232,13 +242,9 @@ let rec parse_args s i len acc =
     match c with
     | 'a' .. 'z' ->
       let i, symbol = parse_symbol_assume_first_char s i len in
-      (match symbol with
-       | `Name name ->
-         let i = skip_whitespace s i len in
-         parse_args s i len (name :: acc)
-       | `Keyword_fun -> errorfn (Loc (s, i)) "Expected name, but got keyword 'fun'."
-       | `Keyword_let -> errorfn (Loc (s, i)) "Expected name, but got keyword 'let'."
-       | `Keyword_match -> errorfn (Loc (s, i)) "Expected name, but got keyword 'match.")
+      let name = expect_name_of_symbol s i symbol in
+      let i = skip_whitespace s i len in
+      parse_args s i len (name :: acc)
     | ':' -> i, List.rev acc
     | _ -> errorfn (Loc (s, i)) "Expected name, but found unexpected character '%c'." c)
   else errorfn (Loc (s, i)) "Expected name, but the program ended."
@@ -403,14 +409,41 @@ and parse_string_sections s i len closer =
   i, section, sections
 ;;
 
+let rec parse_definitions s i len acc =
+  if i < len
+  then (
+    let i, symbol = parse_symbol s i len in
+    let name = expect_name_of_symbol s i symbol in
+    let i = skip_whitespace s i len in
+    let i = skip_exact_char s i len '=' in
+    let i = skip_whitespace s i len in
+    let i, expr = parse_expr s i len in
+    let i = skip_whitespace s i len in
+    let i = skip_exact_char s i len ',' in
+    let i = skip_whitespace s i len in
+    parse_definitions s i len ((name, expr) :: acc))
+  else i, acc
+;;
+
 let parse_program s =
+  let len = String.length s in
+  let i, expr = parse_definitions s 0 len [] in
+  if i < len
+  then
+    errorfn
+      (Loc (s, i))
+      "Finished parsing program before the end of the input text was reached."
+  else expr
+;;
+
+let parse_standalone_expr s =
   let len = String.length s in
   let i, expr = parse_expr s 0 len in
   if i < len
   then
     errorfn
       (Loc (s, i))
-      "Finished parsing program before the end of the input text was reached."
+      "Finished parsing expression before the end of the input text was reached."
   else expr
 ;;
 
@@ -537,6 +570,23 @@ and format_factor buf indent parent expr =
     Buffer.add_char buf '(';
     format_expr buf indent `Non_match expr;
     Buffer.add_char buf ')'
+;;
+
+let format_definitions buf indent definitions =
+  match definitions with
+  | [] -> errorfn Noloc "BUG: no definitions found in program"
+  | (name, expr) :: tl ->
+    Buffer.add_string buf name;
+    Buffer.add_string buf " = ";
+    let new_indent = space_or_newline_and_indent buf indent expr in
+    format_expr buf new_indent `Non_match expr;
+    List.iter tl ~f:(fun (name, expr) ->
+      Buffer.add_string buf ",\n\n";
+      format_indent buf indent;
+      Buffer.add_string buf name;
+      Buffer.add_string buf " = ";
+      let new_indent = space_or_newline_and_indent buf indent expr in
+      format_expr buf new_indent `Non_match expr)
 ;;
 
 type value =
@@ -766,6 +816,26 @@ and evaluate_pattern context pattern value =
   | Match (_, _, loc) -> abortfn loc "Attempted to use match expression as pattern."
 ;;
 
+let rec evaluate_program context definitions =
+  match definitions with
+  | [] -> context
+  | (name, expr) :: tl ->
+    let value = evaluate_expr context expr in
+    let context =
+      if String_map.mem name context
+      then
+        abortfn
+          Noloc
+          "Attempted to define top-level definition '%s', but this name is already \
+           defined."
+          name
+      else String_map.add name value context
+    in
+    evaluate_program context tl
+;;
+
+let expr_value_names _ = []
+
 let print_help () =
   printfn "Commands:";
   printfn "    format FILE           Print the formatted form of code in a file";
@@ -792,7 +862,7 @@ let () =
          let contents = In_channel.with_open_bin filename In_channel.input_all in
          let parsed = parse_program contents in
          let buf = Buffer.create 1024 in
-         format_expr buf 0 `Non_match parsed;
+         format_definitions buf 0 parsed;
          printfn "%s" (Buffer.contents buf)
        | _ ->
          printfn "Too many arguments";
@@ -806,7 +876,7 @@ let () =
          while true do
            Printf.printf "> %!";
            let line = read_line () in
-           let parsed = parse_program line in
+           let parsed = parse_standalone_expr line in
            let value = evaluate_expr String_map.empty parsed in
            let buf = Buffer.create 1024 in
            format_expr buf 0 `Non_match (value_to_expr value);
@@ -825,8 +895,31 @@ let () =
          let contents = In_channel.with_open_bin filename In_channel.input_all in
          let parsed = parse_program contents in
          let context = initial_context (Array.sub Sys.argv ~pos:2 ~len:(num_args - 2)) in
-         let (_ : value) = evaluate_expr context parsed in
+         let context = evaluate_program context parsed in
+         let (_ : value) =
+           evaluate_expr
+             context
+             (Let
+                ( Data ("T", Noloc)
+                , Call (Name ("main", Noloc), [ Data ("T", Noloc) ], Noloc)
+                , Data ("T", Noloc)
+                , Noloc ))
+         in
          ()
+       | _ ->
+         printfn "Too many arguments";
+         print_help ())
+    | "list-value-names" ->
+      (match num_args with
+       | 0 | 1 | 2 ->
+         printfn "Not enough arguments";
+         print_help ()
+       | 3 ->
+         let filename = Sys.argv.(2) in
+         let contents = In_channel.with_open_bin filename In_channel.input_all in
+         let parsed = parse_program contents in
+         let value_names = expr_value_names parsed in
+         List.iter value_names ~f:(printfn "%s\n")
        | _ ->
          printfn "Too many arguments";
          print_help ())
