@@ -409,7 +409,23 @@ and parse_string_sections s i len closer =
   i, section, sections
 ;;
 
-let rec parse_definitions s i len acc =
+let rec parse_rest_of_definitions s i len acc =
+  if i < len
+  then (
+    let i = skip_whitespace s i len in
+    let i = skip_exact_char s i len ',' in
+    let i = skip_whitespace s i len in
+    let i, symbol = parse_symbol s i len in
+    let name = expect_name_of_symbol s i symbol in
+    let i = skip_whitespace s i len in
+    let i = skip_exact_char s i len '=' in
+    let i = skip_whitespace s i len in
+    let i, expr = parse_expr s i len in
+    parse_rest_of_definitions s i len ((name, expr) :: acc))
+  else i, List.rev acc
+;;
+
+let parse_definitions s i len =
   if i < len
   then (
     let i, symbol = parse_symbol s i len in
@@ -419,15 +435,13 @@ let rec parse_definitions s i len acc =
     let i = skip_whitespace s i len in
     let i, expr = parse_expr s i len in
     let i = skip_whitespace s i len in
-    let i = skip_exact_char s i len ',' in
-    let i = skip_whitespace s i len in
-    parse_definitions s i len ((name, expr) :: acc))
-  else i, acc
+    parse_rest_of_definitions s i len [ name, expr ])
+  else i, []
 ;;
 
 let parse_program s =
   let len = String.length s in
-  let i, expr = parse_definitions s 0 len [] in
+  let i, expr = parse_definitions s 0 len in
   if i < len
   then
     errorfn
@@ -518,8 +532,9 @@ let rec format_expr buf indent parent expr =
   | Let (pattern, expr, body, _) ->
     Buffer.add_string buf "let ";
     format_expr buf indent `Non_match pattern;
-    Buffer.add_string buf " = ";
-    format_expr buf indent `Non_match expr;
+    Buffer.add_string buf " =";
+    let expr_indent = space_or_newline_and_indent buf indent expr in
+    format_expr buf expr_indent `Non_match expr;
     Buffer.add_string buf ",\n";
     format_indent buf indent;
     format_expr buf indent parent body
@@ -542,8 +557,9 @@ let rec format_expr buf indent parent expr =
         indent + 1
       | `Non_match -> indent
     in
-    Buffer.add_string buf "match ";
-    format_expr buf indent `Match expr;
+    Buffer.add_string buf "match";
+    let expr_indent = space_or_newline_and_indent buf indent expr in
+    format_expr buf expr_indent `Match expr;
     List.iter cases ~f:(fun (patterns, body) ->
       Buffer.add_char buf '\n';
       format_indent buf indent;
@@ -577,14 +593,14 @@ let format_definitions buf indent definitions =
   | [] -> errorfn Noloc "BUG: no definitions found in program"
   | (name, expr) :: tl ->
     Buffer.add_string buf name;
-    Buffer.add_string buf " = ";
+    Buffer.add_string buf " =";
     let new_indent = space_or_newline_and_indent buf indent expr in
     format_expr buf new_indent `Non_match expr;
     List.iter tl ~f:(fun (name, expr) ->
-      Buffer.add_string buf ",\n\n";
+      Buffer.add_string buf ",\n";
       format_indent buf indent;
       Buffer.add_string buf name;
-      Buffer.add_string buf " = ";
+      Buffer.add_string buf " =";
       let new_indent = space_or_newline_and_indent buf indent expr in
       format_expr buf new_indent `Non_match expr)
 ;;
