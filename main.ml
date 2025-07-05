@@ -700,14 +700,31 @@ let initial_context argv : value String_map.t =
             let value, args = expect_string args in
             let () = expect_no_more_args args in
             Vstring (In_channel.with_open_bin value In_channel.input_all)) )
+    ; ( "int_to_string"
+      , Vbuiltin_fun
+          (fun args ->
+            let value, args = expect_int args in
+            let () = expect_no_more_args args in
+            Vstring (Int.to_string value)) )
+    ; ( "int_compare"
+      , Vbuiltin_fun
+          (fun args ->
+            let a, args = expect_int args in
+            let b, args = expect_int args in
+            let () = expect_no_more_args args in
+            Vdata
+              (if a < b then "Less_than" else if a > b then "Greater_than" else "Equal"))
+      )
     ]
 ;;
 
-let print_value value =
+let value_to_string value =
   let buf = Buffer.create 1024 in
   format_expr buf 0 `Non_match (value_to_expr value);
-  printfn "%s" (Buffer.contents buf)
+  Buffer.contents buf
 ;;
+
+let print_value value = printfn "%s" (value_to_string value)
 
 let rec evaluate_expr context expr =
   match expr with
@@ -775,7 +792,9 @@ and evaluate_match context expr cases =
       | None -> None
       | Some context -> Some (evaluate_expr context body))
   with
-  | None -> abortfn Noloc "No patterns matched value."
+  | None ->
+    let value = value_to_string value in
+    abortfn (loc_of_expr expr) "No patterns matched value:\n%s" value
   | Some value -> value
 
 and evaluate_call_patterns context arg_patterns args =
