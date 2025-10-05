@@ -925,7 +925,7 @@ let () =
        | 0 | 1 | 2 ->
          printfn "Not enough arguments";
          print_help ()
-       | 3 ->
+       | _ ->
          let filename = Sys.argv.(2) in
          let contents = In_channel.with_open_bin filename In_channel.input_all in
          let parsed = parse_program contents in
@@ -940,10 +940,7 @@ let () =
                 , Data ("T", Noloc)
                 , Noloc ))
          in
-         ()
-       | _ ->
-         printfn "Too many arguments";
-         print_help ())
+         ())
     | "list-value-names" ->
       (match num_args with
        | 0 | 1 | 2 ->
