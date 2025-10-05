@@ -869,7 +869,7 @@ let rec evaluate_program context definitions =
     evaluate_program context tl
 ;;
 
-let expr_value_names _ = []
+let expr_value_names definitions = List.map definitions ~f:(fun (name, _) -> name)
 
 let print_help () =
   printfn "Commands:";
@@ -951,7 +951,7 @@ let () =
          let contents = In_channel.with_open_bin filename In_channel.input_all in
          let parsed = parse_program contents in
          let value_names = expr_value_names parsed in
-         List.iter value_names ~f:(printfn "%s\n")
+         List.iter value_names ~f:(printfn "%s")
        | _ ->
          printfn "Too many arguments";
          print_help ())

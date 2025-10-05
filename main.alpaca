@@ -1,32 +1,35 @@
-let println = fun s: print "{s}\n",
-let print_help = fun T:
-  println "The Alpaca programming language (self-hosted version)";
-  println "Commands:";
-  println "    format FILE           Print the formatted form of code in a file";
-  println "    run FILE              Run a file";
-  println "    repl                  Start an interactive interpreter session",
-let num_args = array_length argv,
-match num_args
-| 0 | 1: print_help T
-| _:
-  let command = array_get argv 1,
-  (match command
-   | "format":
-     (match num_args with
-      | 0 | 1 | 2:
-        println "Not enough arguments";
-        print_help T
-      | 3:
-        let filename = array_get argv 1,
-        let contents = read_file filename,
-        T
-      | _:
-        println "Too many arguments";
-        print_help T)
-   | "repl":
-     (match num_args
-      | 0 | 1: println "Not enough arguments"
-      | 2: todo
-      | _:
-        println "Too many arguments";
-        print_help T))
+println = fun s: print "{s}\n",
+print_help =
+  fun T:
+    println "The Alpaca programming language (self-hosted version)";
+    println "Commands:";
+    println "    format FILE           Print the formatted form of code in a file";
+    println "    run FILE              Run a file";
+    println "    repl                  Start an interactive interpreter session",
+main =
+  fun T:
+    let num_args = array_length argv,
+    match num_args
+    | 0 | 1: print_help T
+    | _:
+      let command = array_get argv 1,
+      (match command
+       | "format":
+         (match num_args with
+          | 0 | 1 | 2:
+            println "Not enough arguments";
+            print_help T
+          | 3:
+            let filename = array_get argv 1,
+            let contents = read_file filename,
+            T
+          | _:
+            println "Too many arguments";
+            print_help T)
+       | "repl":
+         (match num_args
+          | 0 | 1: println "Not enough arguments"
+          | 2: todo
+          | _:
+            println "Too many arguments";
+            print_help T))

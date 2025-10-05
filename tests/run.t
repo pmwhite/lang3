@@ -181,10 +181,44 @@ meaning after the opening curly braces switches things into expression mode.
   > .
   {}  }
 
+CHARACTERS
+
+Character literals are denoted by enclosing a character (possibly escaped) in
+single quotes. They can be used both as data, and also patterns for
+matching data.
+
+  $ run <<\.
+  > main = fun T:
+  >   match 'c'
+  >   | 'a': print "a\n"
+  >   | 'c': print "b\n"
+  > .
+  b
+
+INTEGERS
+
+Integer literals are denoted by a sequence of digits. They can be used both as
+data, and also patterns for matching data.
+
+  $ run <<\.
+  > main = fun T:
+  >   match 2
+  >   | 1: print "1\n"
+  >   | 2: print "2\n"
+  > .
+  2
+
 PRIMITIVE OPERATIONS
 
 Alpaca comes with an array of primitive functions for dealing with all the
 primitive kinds of values.
+
+The "print" function writes some output to the standard output stream.
+
+  $ run <<\.
+  > main = fun T: print "hello, world\n"
+  > .
+  hello, world
 
 Command-line arguments are provided in the array "argv". Each item in the array
 can accessed by index.
