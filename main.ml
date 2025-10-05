@@ -758,7 +758,9 @@ let rec evaluate_expr context expr =
        | Vchar c -> Buffer.add_char buf c
        | Vdata _ | Vinteger _ | Vfun (_, _) | Vcall (_, _) | Vbuiltin_fun _ | Varray _ ->
          let loc = loc_of_expr expr in
-         abortfn loc "Attempted to interpolate a non-string value.");
+         abortfn
+           loc
+           "Attempted to interpolate value that is neither a string nor a character.");
       Buffer.add_string buf section);
     Vstring (Buffer.contents buf)
   | Char (value, _) -> Vchar value
