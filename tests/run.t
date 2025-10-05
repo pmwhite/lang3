@@ -145,13 +145,12 @@ pattern matching.
 STRING INTERPOLATION
 
 String literals can contain arbitrary sub-expressions, each of which must
-evaluate to a string. If one evaluates to a non-string value, an error will be
-raised.
+evaluate to either a string or a character. If one evaluates to something else, an error will be raised.
 
   $ run <<\.
   > f = fun x: x,
   > main = fun T:
-  >   print "hello, {"world"}\n";
+  >   print "hello, {"worl"}{'d'}\n";
   >   let world = "world",
   >   print "hello, {world}\n";
   >   print "1 2 {int_to_string 3}\n"
@@ -191,9 +190,9 @@ matching data.
   > main = fun T:
   >   match 'c'
   >   | 'a': print "a\n"
-  >   | 'c': print "b\n"
+  >   | 'c': print "c\n"
   > .
-  b
+  c
 
 INTEGERS
 
@@ -249,6 +248,17 @@ Integers can be compared and converted to strings.
   2 is less than 3
   3 is equal to 3
   4 is greater than 3
+
+Strings can be indexed and measured.
+
+  $ run <<\.
+  > main = fun T:
+  >   let s = "hello",
+  >   print "length: {int_to_string (string_length s)}\n";
+  >   print "first character: {string_get s 0}\n"
+  > .
+  length: 5
+  first character: h
 
 Files can be read into string values.
 

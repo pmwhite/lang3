@@ -715,6 +715,19 @@ let initial_context argv : value String_map.t =
             Vdata
               (if a < b then "Less_than" else if a > b then "Greater_than" else "Equal"))
       )
+    ; ( "string_length"
+      , Vbuiltin_fun
+          (fun args ->
+            let string, args = expect_string args in
+            let () = expect_no_more_args args in
+            Vinteger (String.length string)) )
+    ; ( "string_get"
+      , Vbuiltin_fun
+          (fun args ->
+            let string, args = expect_string args in
+            let index, args = expect_int args in
+            let () = expect_no_more_args args in
+            Vchar string.[index]) )
     ]
 ;;
 
@@ -742,10 +755,8 @@ let rec evaluate_expr context expr =
       let value = evaluate_expr context expr in
       (match value with
        | Vstring s -> Buffer.add_string buf s
-       | Vdata _ | Vinteger _ | Vchar _
-       | Vfun (_, _)
-       | Vcall (_, _)
-       | Vbuiltin_fun _ | Varray _ ->
+       | Vchar c -> Buffer.add_char buf c
+       | Vdata _ | Vinteger _ | Vfun (_, _) | Vcall (_, _) | Vbuiltin_fun _ | Varray _ ->
          let loc = loc_of_expr expr in
          abortfn loc "Attempted to interpolate a non-string value.");
       Buffer.add_string buf section);
@@ -861,8 +872,7 @@ let rec evaluate_program context definitions =
       then
         abortfn
           Noloc
-          "Attempted to define top-level definition '%s', but this name is already \
-           defined."
+          "Attempted to define top-level value '%s', but this name is already defined."
           name
       else String_map.add name value context
     in
@@ -875,7 +885,9 @@ let print_help () =
   printfn "Commands:";
   printfn "    format FILE           Print the formatted form of code in a file";
   printfn "    run FILE              Run a file";
-  printfn "    repl                  Start an interactive interpreter session"
+  printfn "    repl                  Start an interactive interpreter session";
+  printfn
+    "    list-value-names      Print a list of all the top-level definitions in a file."
 ;;
 
 let () =
