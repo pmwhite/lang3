@@ -15,6 +15,7 @@ TOPLEVEL DEFINITIONS
   > b = 0
   > .
   a = 0,
+  
   b = 0
 
 STRINGS
@@ -29,8 +30,11 @@ Chars and strings support various escape sequences and also interpolated express
   > .
   a = "abc \n\t {0} {x} {let x = 0,
   x}",
+  
   b = "this is a test {f a b}",
+  
   c = "\{}",
+  
   d = "\'  \""
 
 CHARS
@@ -42,8 +46,11 @@ CHARS
   > d = '\''
   > .
   a = 'a',
+  
   b = '\n',
+  
   c = '\"',
+  
   d = '\''
 
 LET EXPRESSIONS
@@ -86,11 +93,14 @@ functions go on the next line.
   > d = fun w x: fun y: let z = 0, z
   > .
   a = fun x: x,
+  
   b = fun x: fun y: x,
+  
   c =
     fun x:
       let y = 0,
       y,
+  
   d =
     fun w x:
       fun y:
@@ -109,14 +119,17 @@ have multiple lines.
   > d = f (g a b) (h c (i d e f))
   > .
   a = map xs (fun x: add x 1),
+  
   b =
     map xs (fun x:
       let y = add x 1,
       y),
+  
   c =
     f (let x = a,
     x) (let x = b,
     x),
+  
   d = f (g a b) (h c (i d e f))
 
 MATCH EXPRESSIONS
@@ -134,6 +147,7 @@ in two directions. Parentheses are often necessary to make this possible.
     | A: 0
     | B: 1
     | C: 2,
+  
   b =
     match
       (match x
@@ -142,6 +156,7 @@ in two directions. Parentheses are often necessary to make this possible.
       (match x
        | A: 1)
     | _: 2,
+  
   c =
     match x
     | A b c: "abc"
@@ -161,6 +176,7 @@ composition, since this is a valid transformation.
     c;
     d;
     e,
+  
   b =
     let x = 0,
     print x;

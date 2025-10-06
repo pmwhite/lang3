@@ -1,35 +1,149 @@
-println = fun s: print "{s}\n",
-print_help =
-  fun T:
-    println "The Alpaca programming language (self-hosted version)";
-    println "Commands:";
-    println "    format FILE           Print the formatted form of code in a file";
-    println "    run FILE              Run a file";
-    println "    repl                  Start an interactive interpreter session",
+evaluate_match =
+  fun context expr cases:
+    let value = evaluate_expr context expr,
+    match
+      list_find_map cases (fun (T patterns body):
+        match list_find_map patterns (fun pattern: evaluate_pattern context pattern value)
+        | None: None
+        | Some context: Some evaluate_expr context body)
+    | None: abort_at_loc (loc_of_expr expr) "No patterns matched value:\n{value_to_string value}"
+    | Some value: value,
+
+evaluate_call_patterns =
+  fun context arg_patterns args:
+    match arg_patterns
+    | Empty:
+      (match args
+       | Empty: Some context
+       | Cons _ _: None)
+    | Cons arg_pattern arg_patterns:
+      (match args
+       | Empty: None
+       | Cons arg args:
+         (match evaluate_pattern context arg_pattern arg
+          | None: None
+          | Some context: evaluate_call_patterns context arg_patterns args)),
+
+evaluate_pattern =
+  fun context pattern value:
+    match pattern
+    | Wildcard _: Some context
+    | Name name _: Some (map_add context name value)
+    | Data name _:
+      (match value
+       | Vdata vname:
+         (match string_equal name vname
+          | True: Some context
+          | False: None)
+       | Vinteger _ | Vstring _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: None)
+    | Integer i _:
+      (match value
+       | Vinteger vi:
+         (match int_equal i vi
+          | True: Some context
+          | False: None)
+       | Vdata _ | Vstring _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: None)
+    | String string sections loc:
+      (match sections
+       | Empty:
+         (match value
+          | Vstring vstring:
+            (match string_equal string vstring
+             | True: Some context
+             | False: None)
+          | Vdata _ | Vinteger _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: None)
+       | Cons _ _: abort_at_loc loc "Attempted to use interpolated string as pattern.")
+    | Char c _:
+      (match value with
+       | Vchar vc:
+         (match char_equal c vc
+          | True: Some context
+          | False: None)
+       | Vdata _ | Vinteger _ | Vstring _ | Vfun _ _ | Vcall _ _ | Vbuitin_fun _ | Varray _: None)
+    | Fun _ _ loc: abort_at_loc loc "Attempted to use function expression as pattern."
+    | Let _ _ _ loc: abort_at_loc loc "Attempted to use let expression as pattern."
+    | Seq _ _ loc: abort_at_loc loc "Attempted to use a sequence of two expressions as pattern."
+    | Call fun_ args _:
+      (match value
+       | Vcall vfun vargs: evaluate_call_patterns context (Cons fun_ args) (Cons vfun vargs)
+       | Vdata _ | Vinteger _ | Vchar _ | Vstring _ | Vfun _ _ | Vbuiltin_fun _ | Varray _: None)
+    | Match _ _ loc: abort_at_loc loc "Attempted to use match expression as pattern.",
+
+evaluate_program =
+  fun context definitions:
+    match definitions with
+    | Empty: context
+    | Cons (T name expr) tl:
+      let value = evaluate_expr context expr,
+      let context =
+        match map_contains context name
+        | True: abort "Attempted to define top-level value {name} a second time."
+        | False: abort map_set context name value,
+      evaluate_program context tl,
+
 main =
   fun T:
     let num_args = array_length argv,
     match num_args
-    | 0 | 1: print_help T
+    | 0 | 1:
+      print "The Alpaca programming language (self-hosted version)\n";
+      print "Commands:\n";
+      print "    format FILE           Print the formatted form of code in a file\n";
+      print "    run FILE              Run a file\n";
+      print "    repl                  Start an interactive interpreter session\n"
     | _:
       let command = array_get argv 1,
       (match command
        | "format":
          (match num_args with
-          | 0 | 1 | 2:
-            println "Not enough arguments";
-            print_help T
+          | 0 | 1 | 2: abort "Not enough arguments"
           | 3:
             let filename = array_get argv 1,
             let contents = read_file filename,
-            T
-          | _:
-            println "Too many arguments";
-            print_help T)
+            let parsed = parse_program contents,
+            let buf = buffer_create T,
+            format_definitions buf 0 parsed;
+            print (buffer_contents buf)
+          | _: abort "Too many arguments")
        | "repl":
          (match num_args
-          | 0 | 1: println "Not enough arguments"
-          | 2: todo
+          | 0 | 1: abort "Not enough arguments"
+          | 2:
+            let iter =
+              fun T:
+                print "> ";
+                let line = read_line T,
+                let parsed = parse_standalone_expr line,
+                let value = evaluate_expr map_empty parsed,
+                let buf = buffer_create T,
+                format_expr buf 0 Non_match (value_to_expr value);
+                print (buffer_contents buf);
+                iter T,
+            iter T
+          | _: abort "Too many arguments\n")
+       | "run":
+         (match num_args
+          | 0 | 1 | 2: abort "Not enough arguments"
           | _:
-            println "Too many arguments";
-            print_help T))
+            let filename = array_get argv 2,
+            let contents = read_file filename,
+            let parsed = parse_program contents,
+            let context = initial_context (array_slice argv 2 (int_minus num_args 2)),
+            let context = evaluate_program context parsed,
+            let _ =
+              let t = Data "T" Noloc,
+              let main = Name "main" Noloc,
+              let expr = Let (Call main (Cons t Empty) Noloc),
+              evaluate_expr context expr,
+            T)
+       | "list-value-names":
+         (match num_args
+          | 0 | 1 | 2: abort "Not enough arguments"
+          | 3:
+            let filename = array_get argv 2,
+            let contents = read_file filename,
+            let parsed = parse_program contents,
+            let value_names = list_map parsed (fun (T name _): name),
+            list_iter value_names print
+          | _: abort "Too many arguments")
+       | _: abort "{command} is not a recognized command.")

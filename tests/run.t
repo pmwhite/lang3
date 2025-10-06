@@ -163,7 +163,7 @@ evaluate to either a string or a character. If one evaluates to something else, 
   > f = fun x: x,
   > main = fun T: print "{1}\n"
   > .
-  2:23 ABORT: Attempted to interpolate a non-string value.
+  2:23 ABORT: Attempted to interpolate value that is neither a string nor a character.
   | f = fun x: x,
   | main = fun T: print "{1}\n"
   \-----------------------^

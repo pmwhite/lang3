@@ -325,7 +325,9 @@ let rec parse_factor s i len =
        | _ :: _ ->
          errorfn loc "Character literal must not contain any interpolated expressions.")
     | '(' ->
-      let i, expr = parse_expr s (i + 1) len in
+      let i = skip_whitespace s (i + 1) len in
+      let i, expr = parse_expr s i len in
+      let i = skip_whitespace s i len in
       let i = skip_exact_char s i len ')' in
       i, expr
     | '_' -> i + 1, Wildcard loc
@@ -597,7 +599,7 @@ let format_definitions buf indent definitions =
     let new_indent = space_or_newline_and_indent buf indent expr in
     format_expr buf new_indent `Non_match expr;
     List.iter tl ~f:(fun (name, expr) ->
-      Buffer.add_string buf ",\n";
+      Buffer.add_string buf ",\n\n";
       format_indent buf indent;
       Buffer.add_string buf name;
       Buffer.add_string buf " =";
@@ -871,25 +873,10 @@ let rec evaluate_program context definitions =
     let value = evaluate_expr context expr in
     let context =
       if String_map.mem name context
-      then
-        abortfn
-          Noloc
-          "Attempted to define top-level value '%s', but this name is already defined."
-          name
+      then abortfn Noloc "Attempted to define top-level value '%s' a second time." name
       else String_map.add name value context
     in
     evaluate_program context tl
-;;
-
-let expr_value_names definitions = List.map definitions ~f:(fun (name, _) -> name)
-
-let print_help () =
-  printfn "Commands:";
-  printfn "    format FILE           Print the formatted form of code in a file";
-  printfn "    run FILE              Run a file";
-  printfn "    repl                  Start an interactive interpreter session";
-  printfn
-    "    list-value-names      Print a list of all the top-level definitions in a file."
 ;;
 
 let () =
@@ -897,15 +884,18 @@ let () =
   if num_args < 2
   then (
     printfn "The Alpaca programming language.";
-    print_help ())
+    printfn "Commands:";
+    printfn "    format FILE           Print the formatted form of code in a file";
+    printfn "    run FILE              Run a file";
+    printfn "    repl                  Start an interactive interpreter session";
+    printfn
+      "    list-value-names      Print a list of all the top-level definitions in a file.")
   else (
     let command = Sys.argv.(1) in
     match command with
     | "format" ->
       (match num_args with
-       | 0 | 1 | 2 ->
-         printfn "Not enough arguments";
-         print_help ()
+       | 0 | 1 | 2 -> abortfn Noloc "Not enough arguments"
        | 3 ->
          let filename = Sys.argv.(2) in
          let contents = In_channel.with_open_bin filename In_channel.input_all in
@@ -913,14 +903,10 @@ let () =
          let buf = Buffer.create 1024 in
          format_definitions buf 0 parsed;
          printfn "%s" (Buffer.contents buf)
-       | _ ->
-         printfn "Too many arguments";
-         print_help ())
+       | _ -> abortfn Noloc "Too many arguments")
     | "repl" ->
       (match num_args with
-       | 0 | 1 ->
-         printfn "Not enough arguments";
-         print_help ()
+       | 0 | 1 -> abortfn Noloc "Not enough arguments"
        | 2 ->
          while true do
            Printf.printf "> %!";
@@ -931,14 +917,10 @@ let () =
            format_expr buf 0 `Non_match (value_to_expr value);
            printfn "%s" (Buffer.contents buf)
          done
-       | _ ->
-         printfn "Too many arguments";
-         print_help ())
+       | _ -> abortfn Noloc "Too many arguments")
     | "run" ->
       (match num_args with
-       | 0 | 1 | 2 ->
-         printfn "Not enough arguments";
-         print_help ()
+       | 0 | 1 | 2 -> abortfn Noloc "Not enough arguments"
        | _ ->
          let filename = Sys.argv.(2) in
          let contents = In_channel.with_open_bin filename In_channel.input_all in
@@ -957,17 +939,13 @@ let () =
          ())
     | "list-value-names" ->
       (match num_args with
-       | 0 | 1 | 2 ->
-         printfn "Not enough arguments";
-         print_help ()
+       | 0 | 1 | 2 -> abortfn Noloc "Not enough arguments"
        | 3 ->
          let filename = Sys.argv.(2) in
          let contents = In_channel.with_open_bin filename In_channel.input_all in
          let parsed = parse_program contents in
-         let value_names = expr_value_names parsed in
+         let value_names = List.map parsed ~f:(fun (name, _) -> name) in
          List.iter value_names ~f:(printfn "%s")
-       | _ ->
-         printfn "Too many arguments";
-         print_help ())
-    | _ -> errorfn Noloc "'%s' is not a recognized command." command)
+       | _ -> abortfn Noloc "Too many arguments")
+    | _ -> abortfn Noloc "'%s' is not a recognized command." command)
 ;;
