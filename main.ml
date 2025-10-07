@@ -480,8 +480,15 @@ let rec is_multiline_expr expr =
     is_multiline_expr fun_ || List.exists args ~f:is_multiline_expr
 ;;
 
+let should_break_before expr =
+  match expr with
+  | Wildcard _ | Name _ | Integer _ | String _ | Char _ | Data _ | Let _ | Seq _ | Match _
+  | Call (_, _, _) -> is_multiline_expr expr
+  | Fun (_, _, _) -> false
+;;
+
 let space_or_newline_and_indent buf indent expr =
-  if is_multiline_expr expr
+  if should_break_before expr
   then (
     let indent = indent + 2 in
     Buffer.add_char buf '\n';
@@ -529,7 +536,7 @@ let rec format_expr buf indent parent expr =
       Buffer.add_char buf ' ';
       format_factor buf indent `Non_match arg);
     Buffer.add_string buf ":";
-    let indent = space_or_newline_and_indent buf indent expr in
+    let indent = space_or_newline_and_indent buf indent body in
     format_expr buf indent `Non_match body
   | Let (pattern, expr, body, _) ->
     Buffer.add_string buf "let ";

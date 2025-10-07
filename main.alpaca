@@ -1,272 +1,262 @@
-initial_context =
-  fun argv:
-    let result = Empty,
-    let add = fun result name f: Cons (T name (Vbuiltin_fun f)) result,
-    let result =
-      add result "array_length" (fun args:
-        let T array args = expect_array args,
-        expect_no_more_args args;
-        Vinteger (array_length array)),
-    let result =
-      add result "array_get" (fun args:
-        let T array args = expect_array args,
-        let T index args = expect_int args,
-        expect_no_more_args args;
-        array_get index),
-    let result =
-      let argv = array_map argv (fun arg: Vstring arg),
-      Cons (T "argv" argv) result,
-    let result =
-      add result "print" (fun args:
-        let T value args = expect_string args,
-        expect_no_more_args args;
-        print value;
-        Vdata "T"),
-    let result =
-      add result "abort" (fun args:
-        let T value args = expect_string args,
-        expect_no_more_args args;
-        abort value),
-    let result =
-      add result "read_file" (fun args:
-        let T value args = expect_string args,
-        expect_no_more_args args;
-        Vstring (read_file value)),
-    let result =
-      add result "int_to_string" (fun args:
-        let T value args = expect_int args,
-        expect_no_more_args args;
-        Vstring (int_to_string value)),
-    let result =
-      add result "int_compare" (fun args:
-        let T a args = expect_int args,
-        let T b args = expect_int args,
-        expect_no_more_args args;
-        match int_compare a b
-        | Less_than: Vdata "Less_than"
-        | Greater_than: Vdata "Greater_than"
-        | Equal: Vdata "Equal"),
-    let result =
-      add result "string_length" (fun args:
-        let T value args = expect_string args,
-        expect_no_more_args args;
-        Vinteger (string_length value)),
-    let result =
-      add result "string_get" (fun args:
-        let T string args = expect_string args,
-        let T index args = expect_int args,
-        expect_no_more_args args;
-        Vchar (string_get string index)),
-    result,
+initial_context = fun argv:
+  let result = Empty,
+  let add = fun result name f: Cons (T name (Vbuiltin_fun f)) result,
+  let result =
+    add result "array_length" (fun args:
+      let T array args = expect_array args,
+      expect_no_more_args args;
+      Vinteger (array_length array)),
+  let result =
+    add result "array_get" (fun args:
+      let T array args = expect_array args,
+      let T index args = expect_int args,
+      expect_no_more_args args;
+      array_get index),
+  let result =
+    let argv = array_map argv (fun arg: Vstring arg),
+    Cons (T "argv" argv) result,
+  let result =
+    add result "print" (fun args:
+      let T value args = expect_string args,
+      expect_no_more_args args;
+      print value;
+      Vdata "T"),
+  let result =
+    add result "abort" (fun args:
+      let T value args = expect_string args,
+      expect_no_more_args args;
+      abort value),
+  let result =
+    add result "read_file" (fun args:
+      let T value args = expect_string args,
+      expect_no_more_args args;
+      Vstring (read_file value)),
+  let result =
+    add result "int_to_string" (fun args:
+      let T value args = expect_int args,
+      expect_no_more_args args;
+      Vstring (int_to_string value)),
+  let result =
+    add result "int_compare" (fun args:
+      let T a args = expect_int args,
+      let T b args = expect_int args,
+      expect_no_more_args args;
+      match int_compare a b
+      | Less_than: Vdata "Less_than"
+      | Greater_than: Vdata "Greater_than"
+      | Equal: Vdata "Equal"),
+  let result =
+    add result "string_length" (fun args:
+      let T value args = expect_string args,
+      expect_no_more_args args;
+      Vinteger (string_length value)),
+  let result =
+    add result "string_get" (fun args:
+      let T string args = expect_string args,
+      let T index args = expect_int args,
+      expect_no_more_args args;
+      Vchar (string_get string index)),
+  result,
 
-value_to_string =
-  fun value:
+value_to_string = fun value:
+  let buf = buffer_create T,
+  format_expr buf 0 Non_match (value_to_expr value);
+  buffer_contents buf,
+
+evaluate_expr = fun context expr:
+  match expr
+  | Wildcard loc: abort_at_loc loc "Wildcard expression used as value."
+  | Name name loc:
+    (match map_get context name
+     | None: abort_at_loc "Name \'{name}\' is not defined."
+     | Some value: value)
+  | Data name _: Vdata name
+  | Integer i _: Vinteger i
+  | String section sections _:
     let buf = buffer_create T,
-    format_expr buf 0 Non_match (value_to_expr value);
-    buffer_contents buf,
-
-evaluate_expr =
-  fun context expr:
-    match expr
-    | Wildcard loc: abort_at_loc loc "Wildcard expression used as value."
-    | Name name loc:
-      (match map_get context name
-       | None: abort_at_loc "Name \'{name}\' is not defined."
-       | Some value: value)
-    | Data name _: Vdata name
-    | Integer i _: Vinteger i
-    | String section sections _:
-      let buf = buffer_create T,
-      buffer_add_string buf section;
-      list_iter section (fun (T expr section):
-        let value = evaluate_expr context expr,
-        match value
-        | Vstring s: buffer_add_string buf s
-        | Vchar c: buffer_add_char buf c
-        | Vdata _ | Vinteger _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _:
-          let loc = loc_of_expr,
-          abort_at_lco loc "Attempted to interpolate value that is neither a string nor a character.";
-          buffer_add_string buf section);
-      Vstring (buffer_contents buf)
-    | Char value _: Vchar value
-    | Fun args body _: Vfun args body
-    | Let pattern expr body: evaluate_match context expr (Cons (T (Cons pattern Empty) body) empty)
-    | Seq a b loc: evaluate_match context a (Cons (T (Cons (Data "T" loc) Empty) b) Empty)
-    | Match expr cases _: evaluate_match context expr cases
-    | Call fun_ args loc:
-      let fun_ = evaluate_expr context fun_,
-      let args = list_map args (fun arg: evaluate_expr context arg),
-      (match fun_
-       | Vdata _: Vcall fun_ args
-       | Vinteger _: abort_at_loc loc "Attempted to call an integer value."
-       | Vstring _: abort_at_loc loc "Attempted to call a string value."
-       | Vchar _: abort_at_loc loc "Attempted to call a char value."
-       | Vcall _ _: abort_at_loc loc "Attempted to call a call value."
-       | Vfun arg_patterns body: evaluate_call contet arg_patterns args body
-       | Vbuiltin_fun f: f args
-       | Varray _: abort_at_loc loc "Attempted to call an array value."),
-
-evaluate_call =
-  fun context arg_patterns args body:
-    match arg_patterns
-    | Empty:
-      (match args
-       | Empty: evaluate_expr context body
-       | Cons _ _: abort "Too many arguments.")
-    | Cons arg_pattern arg_patterns:
-      (match args
-       | Empty: abort "Not enough args."
-       | Cons arg args:
-         (match evaluate_pattern context arg_pattern arg
-          | None: abort "No patterns matched value."
-          | Some context: evaluate_call context arg_patterns arg body)),
-
-evaluate_match =
-  fun context expr cases:
-    let value = evaluate_expr context expr,
-    match
-      list_find_map cases (fun (T patterns body):
-        match list_find_map patterns (fun pattern: evaluate_pattern context pattern value)
-        | None: None
-        | Some context: Some evaluate_expr context body)
-    | None: abort_at_loc (loc_of_expr expr) "No patterns matched value:\n{value_to_string value}"
-    | Some value: value,
-
-evaluate_call_patterns =
-  fun context arg_patterns args:
-    match arg_patterns
-    | Empty:
-      (match args
-       | Empty: Some context
-       | Cons _ _: None)
-    | Cons arg_pattern arg_patterns:
-      (match args
-       | Empty: None
-       | Cons arg args:
-         (match evaluate_pattern context arg_pattern arg
-          | None: None
-          | Some context: evaluate_call_patterns context arg_patterns args)),
-
-evaluate_pattern =
-  fun context pattern value:
-    match pattern
-    | Wildcard _: Some context
-    | Name name _: Some (map_add context name value)
-    | Data name _:
-      (match value
-       | Vdata vname:
-         (match string_equal name vname
-          | True: Some context
-          | False: None)
-       | Vinteger _ | Vstring _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: None)
-    | Integer i _:
-      (match value
-       | Vinteger vi:
-         (match int_equal i vi
-          | True: Some context
-          | False: None)
-       | Vdata _ | Vstring _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: None)
-    | String string sections loc:
-      (match sections
-       | Empty:
-         (match value
-          | Vstring vstring:
-            (match string_equal string vstring
-             | True: Some context
-             | False: None)
-          | Vdata _ | Vinteger _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: None)
-       | Cons _ _: abort_at_loc loc "Attempted to use interpolated string as pattern.")
-    | Char c _:
-      (match value with
-       | Vchar vc:
-         (match char_equal c vc
-          | True: Some context
-          | False: None)
-       | Vdata _ | Vinteger _ | Vstring _ | Vfun _ _ | Vcall _ _ | Vbuitin_fun _ | Varray _: None)
-    | Fun _ _ loc: abort_at_loc loc "Attempted to use function expression as pattern."
-    | Let _ _ _ loc: abort_at_loc loc "Attempted to use let expression as pattern."
-    | Seq _ _ loc: abort_at_loc loc "Attempted to use a sequence of two expressions as pattern."
-    | Call fun_ args _:
-      (match value
-       | Vcall vfun vargs: evaluate_call_patterns context (Cons fun_ args) (Cons vfun vargs)
-       | Vdata _ | Vinteger _ | Vchar _ | Vstring _ | Vfun _ _ | Vbuiltin_fun _ | Varray _: None)
-    | Match _ _ loc: abort_at_loc loc "Attempted to use match expression as pattern.",
-
-evaluate_program =
-  fun context definitions:
-    match definitions with
-    | Empty: context
-    | Cons (T name expr) tl:
+    buffer_add_string buf section;
+    list_iter section (fun (T expr section):
       let value = evaluate_expr context expr,
-      let context =
-        match map_contains context name
-        | True: abort "Attempted to define top-level value {name} a second time."
-        | False: abort map_set context name value,
-      evaluate_program context tl,
+      match value
+      | Vstring s: buffer_add_string buf s
+      | Vchar c: buffer_add_char buf c
+      | Vdata _ | Vinteger _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _:
+        let loc = loc_of_expr,
+        abort_at_lco loc "Attempted to interpolate value that is neither a string nor a character.";
+        buffer_add_string buf section);
+    Vstring (buffer_contents buf)
+  | Char value _: Vchar value
+  | Fun args body _: Vfun args body
+  | Let pattern expr body: evaluate_match context expr (Cons (T (Cons pattern Empty) body) empty)
+  | Seq a b loc: evaluate_match context a (Cons (T (Cons (Data "T" loc) Empty) b) Empty)
+  | Match expr cases _: evaluate_match context expr cases
+  | Call fun_ args loc:
+    let fun_ = evaluate_expr context fun_,
+    let args = list_map args (fun arg: evaluate_expr context arg),
+    (match fun_
+     | Vdata _: Vcall fun_ args
+     | Vinteger _: abort_at_loc loc "Attempted to call an integer value."
+     | Vstring _: abort_at_loc loc "Attempted to call a string value."
+     | Vchar _: abort_at_loc loc "Attempted to call a char value."
+     | Vcall _ _: abort_at_loc loc "Attempted to call a call value."
+     | Vfun arg_patterns body: evaluate_call contet arg_patterns args body
+     | Vbuiltin_fun f: f args
+     | Varray _: abort_at_loc loc "Attempted to call an array value."),
 
-main =
-  fun T:
-    let num_args = array_length argv,
-    match num_args
-    | 0 | 1:
-      print "The Alpaca programming language (self-hosted version)\n";
-      print "Commands:\n";
-      print "    format FILE           Print the formatted form of code in a file\n";
-      print "    run FILE              Run a file\n";
-      print "    repl                  Start an interactive interpreter session\n"
-    | _:
-      let command = array_get argv 1,
-      (match command
-       | "format":
-         (match num_args with
-          | 0 | 1 | 2: abort "Not enough arguments"
-          | 3:
-            let filename = array_get argv 1,
-            let contents = read_file filename,
-            let parsed = parse_program contents,
+evaluate_call = fun context arg_patterns args body:
+  match arg_patterns
+  | Empty:
+    (match args
+     | Empty: evaluate_expr context body
+     | Cons _ _: abort "Too many arguments.")
+  | Cons arg_pattern arg_patterns:
+    (match args
+     | Empty: abort "Not enough args."
+     | Cons arg args:
+       (match evaluate_pattern context arg_pattern arg
+        | None: abort "No patterns matched value."
+        | Some context: evaluate_call context arg_patterns arg body)),
+
+evaluate_match = fun context expr cases:
+  let value = evaluate_expr context expr,
+  match
+    list_find_map cases (fun (T patterns body):
+      match list_find_map patterns (fun pattern: evaluate_pattern context pattern value)
+      | None: None
+      | Some context: Some evaluate_expr context body)
+  | None: abort_at_loc (loc_of_expr expr) "No patterns matched value:\n{value_to_string value}"
+  | Some value: value,
+
+evaluate_call_patterns = fun context arg_patterns args:
+  match arg_patterns
+  | Empty:
+    (match args
+     | Empty: Some context
+     | Cons _ _: None)
+  | Cons arg_pattern arg_patterns:
+    (match args
+     | Empty: None
+     | Cons arg args:
+       (match evaluate_pattern context arg_pattern arg
+        | None: None
+        | Some context: evaluate_call_patterns context arg_patterns args)),
+
+evaluate_pattern = fun context pattern value:
+  match pattern
+  | Wildcard _: Some context
+  | Name name _: Some (map_add context name value)
+  | Data name _:
+    (match value
+     | Vdata vname:
+       (match string_equal name vname
+        | True: Some context
+        | False: None)
+     | Vinteger _ | Vstring _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: None)
+  | Integer i _:
+    (match value
+     | Vinteger vi:
+       (match int_equal i vi
+        | True: Some context
+        | False: None)
+     | Vdata _ | Vstring _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: None)
+  | String string sections loc:
+    (match sections
+     | Empty:
+       (match value
+        | Vstring vstring:
+          (match string_equal string vstring
+           | True: Some context
+           | False: None)
+        | Vdata _ | Vinteger _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: None)
+     | Cons _ _: abort_at_loc loc "Attempted to use interpolated string as pattern.")
+  | Char c _:
+    (match value with
+     | Vchar vc:
+       (match char_equal c vc
+        | True: Some context
+        | False: None)
+     | Vdata _ | Vinteger _ | Vstring _ | Vfun _ _ | Vcall _ _ | Vbuitin_fun _ | Varray _: None)
+  | Fun _ _ loc: abort_at_loc loc "Attempted to use function expression as pattern."
+  | Let _ _ _ loc: abort_at_loc loc "Attempted to use let expression as pattern."
+  | Seq _ _ loc: abort_at_loc loc "Attempted to use a sequence of two expressions as pattern."
+  | Call fun_ args _:
+    (match value
+     | Vcall vfun vargs: evaluate_call_patterns context (Cons fun_ args) (Cons vfun vargs)
+     | Vdata _ | Vinteger _ | Vchar _ | Vstring _ | Vfun _ _ | Vbuiltin_fun _ | Varray _: None)
+  | Match _ _ loc: abort_at_loc loc "Attempted to use match expression as pattern.",
+
+evaluate_program = fun context definitions:
+  match definitions with
+  | Empty: context
+  | Cons (T name expr) tl:
+    let value = evaluate_expr context expr,
+    let context =
+      match map_contains context name
+      | True: abort "Attempted to define top-level value {name} a second time."
+      | False: abort map_set context name value,
+    evaluate_program context tl,
+
+main = fun T:
+  let num_args = array_length argv,
+  match num_args
+  | 0 | 1:
+    print "The Alpaca programming language (self-hosted version)\n";
+    print "Commands:\n";
+    print "    format FILE           Print the formatted form of code in a file\n";
+    print "    run FILE              Run a file\n";
+    print "    repl                  Start an interactive interpreter session\n"
+  | _:
+    let command = array_get argv 1,
+    (match command
+     | "format":
+       (match num_args with
+        | 0 | 1 | 2: abort "Not enough arguments"
+        | 3:
+          let filename = array_get argv 1,
+          let contents = read_file filename,
+          let parsed = parse_program contents,
+          let buf = buffer_create T,
+          format_definitions buf 0 parsed;
+          print (buffer_contents buf)
+        | _: abort "Too many arguments")
+     | "repl":
+       (match num_args
+        | 0 | 1: abort "Not enough arguments"
+        | 2:
+          let iter = fun T:
+            print "> ";
+            let line = read_line T,
+            let parsed = parse_standalone_expr line,
+            let value = evaluate_expr map_empty parsed,
             let buf = buffer_create T,
-            format_definitions buf 0 parsed;
-            print (buffer_contents buf)
-          | _: abort "Too many arguments")
-       | "repl":
-         (match num_args
-          | 0 | 1: abort "Not enough arguments"
-          | 2:
-            let iter =
-              fun T:
-                print "> ";
-                let line = read_line T,
-                let parsed = parse_standalone_expr line,
-                let value = evaluate_expr map_empty parsed,
-                let buf = buffer_create T,
-                format_expr buf 0 Non_match (value_to_expr value);
-                print (buffer_contents buf);
-                iter T,
-            iter T
-          | _: abort "Too many arguments\n")
-       | "run":
-         (match num_args
-          | 0 | 1 | 2: abort "Not enough arguments"
-          | _:
-            let filename = array_get argv 2,
-            let contents = read_file filename,
-            let parsed = parse_program contents,
-            let context = initial_context (array_slice argv 2 (int_minus num_args 2)),
-            let context = evaluate_program context parsed,
-            let _ =
-              let t = Data "T" Noloc,
-              let main = Name "main" Noloc,
-              let expr = Let (Call main (Cons t Empty) Noloc),
-              evaluate_expr context expr,
-            T)
-       | "list-value-names":
-         (match num_args
-          | 0 | 1 | 2: abort "Not enough arguments"
-          | 3:
-            let filename = array_get argv 2,
-            let contents = read_file filename,
-            let parsed = parse_program contents,
-            let value_names = list_map parsed (fun (T name _): name),
-            list_iter value_names print
-          | _: abort "Too many arguments")
-       | _: abort "{command} is not a recognized command.")
+            format_expr buf 0 Non_match (value_to_expr value);
+            print (buffer_contents buf);
+            iter T,
+          iter T
+        | _: abort "Too many arguments\n")
+     | "run":
+       (match num_args
+        | 0 | 1 | 2: abort "Not enough arguments"
+        | _:
+          let filename = array_get argv 2,
+          let contents = read_file filename,
+          let parsed = parse_program contents,
+          let context = initial_context (array_slice argv 2 (int_minus num_args 2)),
+          let context = evaluate_program context parsed,
+          let _ =
+            let t = Data "T" Noloc,
+            let main = Name "main" Noloc,
+            let expr = Let (Call main (Cons t Empty) Noloc),
+            evaluate_expr context expr,
+          T)
+     | "list-value-names":
+       (match num_args
+        | 0 | 1 | 2: abort "Not enough arguments"
+        | 3:
+          let filename = array_get argv 2,
+          let contents = read_file filename,
+          let parsed = parse_program contents,
+          let value_names = list_map parsed (fun (T name _): name),
+          list_iter value_names print
+        | _: abort "Too many arguments")
+     | _: abort "{command} is not a recognized command.")
