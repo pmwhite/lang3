@@ -1,3 +1,26 @@
+expect_array = fun args:
+  let T arg args = expect_arg args,
+  match arg
+  | Vdata _ | Vinteger _ | Vstring _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _: abort "Expected array value."
+  | Varray array: T array args,
+
+expect_int = fun args:
+  let T arg args = expect_arg args,
+  match arg
+  | Vdata _ | Vstring _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: abort "Expected int value."
+  | Vinteger int: T int args,
+
+expect_string = fun args:
+  let T arg args = expect_arg args,
+  match arg
+  | Vdata _ | Vinteger _ | Vchar _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _: abort "Expected string value."
+  | Vstring value: T value args,
+
+expect_no_more_args = fun args:
+  match args
+  | Empty: T
+  | Cons _ _: abort "Too many args.",
+
 initial_context = fun argv:
   let result = Empty,
   let add = fun result name f: Cons (T name (Vbuiltin_fun f)) result,
