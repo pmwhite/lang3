@@ -1,3 +1,78 @@
+format_expr = fun buf indent parent expr:
+  match expr
+  | Wildcard _: buffer_add_string buf "_"
+  | Name name _: buffer_add_string buf name
+  | Integer i _: buffer_add_string buf (int_to_string i)
+  | String section sections _:
+    buffer_add_char buf '\"';
+    format_string_contents buf section;
+    list_iter sections (fun (T expr section):
+      buffer_add_char buf '\{';
+      format_expr buf indent Non_match expr;
+      buffer_add_char buf '}';
+      format_string_contents buf section);
+    buffer_add_char buf '\"'
+  | Char c _:
+    buffer_add_char buf '\'';
+    format_char_contents buf c;
+    buffer_add_char buf '\''
+  | Fun args body _:
+    buffer_add_string buf "fun";
+    list_iter args (fun arg:
+      buffer_add_char buf ' ';
+      format_factor buf indent Non_match arg);
+    buffer_add_string buf ":";
+    let indent = space_or_newline_and_indent buf indent body,
+    format_expr buf indent Non_match body
+  | Let pattern expr body _:
+    buffer_add_string buf "let ";
+    format_expr buf indent Non_match pattern;
+    buffer_add_string buf " =";
+    let expr_indent = space_or_newline_and_indent buf indent expr,
+    format_expr buf expr_indent Non_match expr;
+    buffer_add_string buf ",\n";
+    format_indent buf indent;
+    format_expr buf indent parent body
+  | Seq expr next _:
+    format_expr buf indent Non_match expr;
+    buffer_add_string buf ";\n";
+    format_indent buf indent;
+    format_expr buf indent Non_match next
+  | Call fun_ args _:
+    format_factor buf indent Non_match fun_;
+    list_iter args (fun arg:
+      buffer_add_char buf ' ';
+      format_factor buf indent Non_match arg)
+  | Data name _: buffer_add_string buf name
+  | Match expr cases _:
+    let indent =
+      match parent
+      | Match:
+        buffer_add_char buf '(';
+        int_add indent 1
+      | Non_match: indent,
+    buffer_add_string buf "match";
+    let expr_indent = space_or_newline_and_indent buf indent expr,
+    format_expr buf expr_indent Match expr;
+    list_iter cases (fun (T patterns body):
+      buffer_add_char buf '\n';
+      format_indent buf indent;
+      let T =
+        match patterns
+        | Cons hd tl:
+          buffer_add_string buf "| ";
+          format_expr buf indent Match hd;
+          list_iter tl (fun pattern:
+            buffer_add_string buf " | ";
+            format_expr buf indent Match pattern)
+        | Empty: abort "BUG: no patterns in case",
+      buffer_add_string buf ":";
+      let indent = space_or_newline_and_indent buf indent body,
+      format_expr buf indent Match body);
+    match parent
+    | Match: buffer_add_char buf ')'
+    | Non_match: T,
+
 format_factor = fun buf indent parent expr:
   match expr
   | Wildcard _ | Name _ _ | Data _ _ | Integer _ _ | String _ _ _ | Char _ _: format_expr buf indent parent expr
