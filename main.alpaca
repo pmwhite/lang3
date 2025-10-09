@@ -1,3 +1,37 @@
+format_factor = fun buf indent parent expr:
+  match expr
+  | Wildcard _ | Name _ _ | Data _ _ | Integer _ _ | String _ _ _ | Char _ _: format_expr buf indent parent expr
+  | Fun _ _ _ | Let _ _ _ _ | Seq _ _ _ | Call _ _ _ | Match _ _ _:
+    buffer_add_char buf '(';
+    format_expr buf indent Non_match expr;
+    buffer_add_char buf ')',
+
+format_definitions = fun buf indent definitions:
+  match definitions
+  | Empty: abort "BUG: no definitions found in program"
+  | Cons (T name expr) tl:
+    buffer_add_string buf name;
+    buffer_add_string buf " =";
+    let new_indent = space_or_newline_and_indent buf indent expr,
+    format_expr buf new_indent Non_match expr;
+    list_iter tl (fun (T name expr):
+      buffer_add_string buf ",\n\n";
+      format_indent buf indent;
+      buffer_add_string buf name;
+      buffer_add_string buf " =";
+      let new_indent = space_or_newline_and_indent buf indent expr,
+      format_expr buf new_indent Non_match expr),
+
+value_to_expr = fun value:
+  match value
+  | Vdata name: Data name Noloc
+  | Vinteger i: Integer i Noloc,
+
+expect_arg = fun args:
+  match args
+  | Empty: abort "Not enough args."
+  | Cons arg args: T arg args,
+
 expect_array = fun args:
   let T arg args = expect_arg args,
   match arg
