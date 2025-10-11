@@ -1,3 +1,108 @@
+parse_patterns = fun s i len acc:
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match c
+     | '|':
+       let i = int_add i 1,
+       let i = skip_whitespace s i len,
+       let T i pattern = parse_expr s i len,
+       let i = skip_whitespace s i len,
+       parse_patterns s i len (Cons pattern acc)
+     | ':': T (int_add i 1) (list_rev acc))
+  | Greater_than | Equal: abort_at_loc (Loc s i) "Expected either \'|\' or \':\', but reached end of program.",
+
+parse_cases = fun s i len acc:
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match c
+     | '|':
+       let T i patterns = parse_patterns s i len Empty,
+       let i = skip_whitespace s i len,
+       let T i body = parse_expr s i len,
+       parse_cases s i len (Cons (T patterns body) acc)
+     | _: T i (list_rev acc))
+  | Greater_than | Equal: T i (list_rev acc),
+
+parse_factor_sequence = fun s i len acc:
+  let T i factor = parse_factor s i len,
+  let acc = Cons factor acc,
+  let i = skip_whitespace s i len,
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match c
+     | ')' | '=' | ';' | ':' | '|' | ',' | '}': T i (list_rev acc)
+     | _: parse_factor_sequence s i len acc)
+  | Greater_than | Equal: T i (list_rev acc),
+
+parse_expr = fun s i len:
+  let loc = Loc s i,
+  let T i factors = parse_factor_sequence s i len Empty,
+  let expr = factors_to_expr factors loc,
+  let i = skip_whitespace s i len,
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match c
+     | ';':
+       let i = int_add i 1,
+       let i = skip_whitespace s i len,
+       let T i next = parse_expr s i len,
+       T i (Seq expr next loc)
+     | _: T i expr)
+  | Greater_than | Equal: T i expr,
+
+parse_rest_of_sections = fun s i len closer next acc:
+  match next
+  | Done: T i (list_rev acc)
+  | Keep_going:
+    let T i expr = parse_expr s i len,
+    let i = skip_exact_char s i len '}',
+    let i section next = parse_string_section s i len closer,
+    parse_rest_of_sections s i len closer next (Cons (T expr section) acc),
+
+parse_string_sections = fun s i len closer:
+  let T i section next = parse_string_section s i len closer,
+  let T i sections = parse_rest_of_sections s i len closer next Empty,
+  T i section sections,
+
+parse_rest_of_definitions = fun s i len acc:
+  match int_compare i len
+  | Less_than:
+    let i = skip_whitespace s i len,
+    let i = skip_exact_char s i len,
+    let i = skip_whitespace s i len,
+    let T i symbol = parse_symbol s i len,
+    let name = exact_name_of_symbol s i symbol,
+    let i = skip_whitespace s i len,
+    let i = skip_exact_char s i len '=',
+    let i = skip_whitespace s i len,
+    let T i expr = parse_expr s i len,
+    parse_restr_of_definitions s i len (Cons (T name expr) acc)
+  | Greater_than | Equal: T i (list_rev acc),
+
+parse_definitions = fun s i len:
+  match int_compare i len
+  | Less_than:
+    let T i symbol = parse_symbol s i len,
+    let name = expect_name_of_symbol s i symbol,
+    let i = skip_whitespace s i len,
+    let i = skip_exact_char s i len,
+    let i = skip_whitespace s i len,
+    let T i expr = parse_expr s i len,
+    let i = skip_whitespace s i len,
+    parse_rest_of_definitions s i len (Cons (T name expr) Empty)
+  | Greater_than | Equal: T i Empty,
+
+parse_program = fun s:
+  let len = string_length s,
+  let T i expr = parse_definitions s 0 len,
+  match int_compare i len
+  | Less_than: abort_at_loc (Loc s i) "Finished parsing program before the end of the input text was reached."
+  | Greater_than | Equal: expr,
+
 parse_standalone_expr = fun s:
   let len = string_length s,
   let T i expr = parse_expr s 0 len,
