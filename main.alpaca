@@ -1,3 +1,15 @@
+format_char_contents = fun buf c:
+  match c
+  | '\t': buffer_add_string buf "\\t"
+  | '\n': buffer_add_string buf "\\n"
+  | '\\': buffer_add_string buf "\\\\"
+  | '\{': buffer_add_string buf "\{"
+  | '\"': buffer_add_string buf "\\\""
+  | '\'': buffer_add_string buf "\\\'"
+  | c: buffer_add_char buf c,
+
+format_string_contents = fun buf s: string_iter s (fun c: format_char_contents buf c),
+
 format_expr = fun buf indent parent expr:
   match expr
   | Wildcard _: buffer_add_string buf "_"

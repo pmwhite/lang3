@@ -1,24 +1,21 @@
 if exists("b:current_syntax")
   finish
 endif
+
 let b:current_syntax = "alpaca"
 
-syn case match
-
-set synmaxcol=250
-
-syn keyword alpacaKeyword let
-syn keyword alpacaKeyword fun
-syn keyword alpacaKeyword match
-syn match alpacaComment "%.*\n"
+syn keyword alpacaKeyword fun let match
+syn keyword alpacaBuiltin array_length array_get print read_file int_to_string int_compare string_length string_get argv
 syn match alpacaData "[A-Z][a-zA-Z0-9_]*"
-syn region alpacaString start=+"+ skip=/\v(\\x?\x+|\\)@<!\\"|""/ end=+"+ keepend
-syn region alpacaString start=+[uU]\=\z("""\)+ skip=+\\["']+ end="\z1" keepend
+syn match alpacaNumber "\<\d\+\>"
+syn region alpacaString start=/"/ end=/"/ contains=alpacaEscape
+syn region alpacaChar start=/'/ end=/'/ contains=alpacaEscape
+syn match alpacaEscape /\\./
 
 hi def link alpacaKeyword Keyword
-hi def link alpacaVariable PreProc
-hi def link alpacaComment Comment
+hi def link alpacaBuiltin Function
+hi def link alpacaData Type
+hi def link alpacaNumber Number
 hi def link alpacaString String
-
-
-syntax sync minlines=200
+hi def link alpacaChar Character
+hi def link alpacaEscape SpecialChar
