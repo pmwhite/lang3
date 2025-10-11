@@ -1,3 +1,69 @@
+parse_factor = fun s i len:
+  let loc = Loc s i,
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match c
+     | range 'a' 'z':
+       let T i symbol = parse_symbol_assume_first_char s i len,
+       (match symbol
+        | Name name: T i (Name name loc)
+        | Keyword_fun:
+          let i = skip_whitespace s i len,
+          let T i args = parse_factor_sequence s i len Empty,
+          let i = skip_whitespace s i len,
+          let i = skip_exact_char s i len ':',
+          let i = skip_whitespace s i len,
+          let T i body = parse_expr s i len,
+          T i (Fun args body loc)
+        | Keyword_let:
+          let i = skip_whitespace s i len,
+          let T i pattern = parse_expr s i len,
+          let i = skip_whitespace s i len,
+          let i = skip_exact_char s i len '=',
+          let i = skip_whitespace s i len,
+          let T i expr = parse_expr s i len,
+          let i = skip_whitespace s i len,
+          let i = skip_exact_char s i len ',',
+          let i = skip_whitespace s i len,
+          let T i body = parse_expr s i len,
+          T i (Let pattern expr body loc)
+        | Keyword_match:
+          let i = skip_whitespace s i len,
+          let T i expr = parse_expr s i len,
+          let i = skip_whitespace s i len,
+          let T i cases = parse_cases s i len Empty,
+          T i (Match expr cases loc))
+     | range 'A' 'Z':
+       let buf = buffer_create T,
+       buffer_add_char buf c;
+       let T i data_name = parse_rest_of_data_name s (int_add i 1) len buf,
+       T i (Data data_name loc)
+     | range '0' '9':
+       let initial = int_subtrace (char_code c) (char_code '0'),
+       let T i integer = parse_rest_of_integer s (int_add i 1) len initial,
+       T i (Integer integer loc)
+     | '\"':
+       let T i section sections = parse_string_sections s (int_add i 1) len '\"',
+       T i (String section sections loc)
+     | '\'':
+       let T i section sections = parse_string sections s (int_add i 1) len '\'',
+       (match sections
+        | Empty:
+          (match string_length section
+           | 1: T i (Char (string_get section 0) loc)
+           | _: abort_at_loc loc "Character literal must only describe a single character.")
+        | Cons _ _: abort_at_loc loc "Character literal must not contain any interpolated expressions.")
+     | '(':
+       let i = skip_whitespace s (int_add i 1) len,
+       let T i expr = parse_expr s i len,
+       let i = skip_whitespace s i len,
+       let i = skip_exact_char s i len ')',
+       T i expr
+     | '_': T (int_add i 1) (Wildcard loc)
+     | _: abort_at_loc loc "Expected to find the beginning of an expression, but found an unexpected character \'{char_repr c}\' instead.")
+  | Greater_than | Equal: abort_at_loc loc "Expected to find an expression, but the program ended.",
+
 parse_patterns = fun s i len acc:
   match int_compare i len
   | Less_than:
