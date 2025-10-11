@@ -1,3 +1,35 @@
+parse_standalone_expr = fun s:
+  let len = string_length s,
+  let T i expr = parse_expr s 0 len,
+  match int_compare i len
+  | Less_than: abort_at_loc (Loc s i) "Finished parsing program before the end of the input text was reached."
+  | Greater_than | Equal: expr,
+
+format_indent = fun buf indent:
+  match int_compare indent 0
+  | Greater_than:
+    buffer_add_char buf ' ';
+    format_indent buf (int_subtract indent 1)
+  | Less_than | Equal: T,
+
+is_multiline_expr = fun expr:
+  match expr
+  | Wildcard _ | Name _ _ | Integer _ _ | String _ _ | Char _ _ | Data _ _: False
+  | Let _ _ _ | Seq _ _ | Match _ _ _: True
+  | Fun _ body _: is_multiline_expr body
+  | Call fun_ args _: bool_or (is_multiline_expr fun_) (list_exists args is_multiline_expr),
+
+space_or_newline_and_indent = fun buf indent expr:
+  match should_break_before expr
+  | True:
+    let indent = int_add indent 2,
+    buffer_add_char buf '\n';
+    format_indent buf indent;
+    indent
+  | False:
+    buffer_add_char buf ' ';
+    indent,
+
 format_char_contents = fun buf c:
   match c
   | '\t': buffer_add_string buf "\\t"
@@ -385,7 +417,7 @@ main = fun T:
           let filename = array_get argv 2,
           let contents = read_file filename,
           let parsed = parse_program contents,
-          let context = initial_context (array_slice argv 2 (int_minus num_args 2)),
+          let context = initial_context (array_slice argv 2 (int_subtract num_args 2)),
           let context = evaluate_program context parsed,
           let _ =
             let t = Data "T" Noloc,
