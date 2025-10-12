@@ -9,6 +9,9 @@
      - namespacing and toplevel declarations
      - program introspection commands
      - ai edit loop wrapper
+     - as patterns
+     - tree-calculus introspection
+     - range patterns
 *)
 
 open struct
@@ -232,7 +235,7 @@ let expect_name_of_symbol s i symbol =
   | `Name name -> name
   | `Keyword_fun -> errorfn (Loc (s, i)) "Expected name, but got keyword 'fun'."
   | `Keyword_let -> errorfn (Loc (s, i)) "Expected name, but got keyword 'let'."
-  | `Keyword_match -> errorfn (Loc (s, i)) "Expected name, but got keyword 'match."
+  | `Keyword_match -> errorfn (Loc (s, i)) "Expected name, but got keyword 'match'."
 ;;
 
 let rec parse_args s i len acc =

@@ -1,3 +1,173 @@
+is_symbol_char = fun c:
+  match c
+  | range 'a' 'z' | range '0' '9' | '_': True
+  | _: False,
+
+symbol_of_string = fun s:
+  match s
+  | "fun": Keyword_fun
+  | "let": Keyword_let
+  | "match": Keyword_match
+  | _: Name,
+
+parse_rest_of_symbol = fun s i len buf:
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match is_symbol_char c
+     | True:
+       buffer_add_char buf c;
+       parse_rest_of_symbol s (int_add i 1) len buf
+     | False: T i (symbol_of_string (buffer_contents buf)))
+  | Greater_than | Equal: T i (symbol_of_string (buffer_contents buf)),
+
+parse_rest_of_data_name = fun s i len buf:
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match is_cymbol_char c
+     | True:
+       buffer_add_char buf c;
+       parse_rest_of_symbol s (int_add i 1) len buf
+     | False: T i (symbol_of_string (buffer_contents buf)))
+  | Greater_than | Equal: T i (symbol_of_string (buffer_contents buf)),
+
+line_and_column = fun s acc_l prev_acc_i acc_i goal_i:
+  match string_index_from acc_i '\n'
+  | None:
+    let excerpt = string_sub s prev_acc_i (int_subtract (string_length s) prev_acc_i),
+    let line = string_sub s acc_i (int_subtract (string_length s) acc_i),
+    T acc_l (int_add (int_subtract goal_i acc_i) 1) excerpt line
+  | Some i:
+    (match int_compare i goal_i
+     | Less_than: line_and_column s (int_add acc_l 1) acc_i (int_add i 1) goal_i
+     | Greater_than | Equal:
+       let excerpt = string_sub s prev_acc_i (int_subtract i prev_acc_i),
+       let line = string_sub s acc_i (int_subtract i acc_i),
+       T acc_l (int_add (int_subtract goal_i acc_i) 1) excerpt line),
+
+abort_at_loc = fun (Loc s i) message:
+  let T lnum cnum excerpt line = line_and_column s 1 0 0 i,
+  let excerpt_lines = string_split_on_char excerpt '\n',
+  print "{lnum}:{cnum} {message}\n";
+  list_iter excerpt_lines (fun line: print "| {line}\n");
+  let indent = string_repeat '-' cnum,
+  print "\\{indent}^\n";
+  let begin_ = int_max (int_subtract cnum 4) 0,
+  let end_ = int_min (int_add cnum 4) (string_length line),
+  let part = string_sub line begin_ (int_subtract end_ begin_),
+  print "Specifically this part: `{part}`\n";
+  abort "EXITING",
+
+parse_rest_of_integer = fun s i len acc:
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match c
+     | range '0' '9':
+       let digit = int_subtrace (char_code c) (char_code '0'),
+       (match int_compare acc 0
+        | Greater_than | Equal: parse_rest_of_integer s (int_add i 1) len acc
+        | Less_than: abort_at_loc (Loc s i) "Integer literal must be representable in 31 bits, but it is too large."))
+  | Greater_than | Equal: T i acc,
+
+parse_string_section = fun s i len closer:
+  let iter = fun s i len closer buf:
+    match int_compare i len
+    | Less_than:
+      let c = string_get s i,
+      (match char_equal c closer
+       | True: T (int_add i 1) (buffer_contents buf) Done
+       | False:
+         (match c
+          | '\{': T (int_add i 1) (buffer_contents buf) Keep_going
+          | '\\':
+            let i = int_add i 1,
+            (match int_compare i len
+             | Less_than:
+               let c = string_get s i,
+               let value_char =
+                 match c
+                 | 't': '\t'
+                 | 'n': '\n'
+                 | '\\': '\\'
+                 | '\{': '\{'
+                 | '\"': '\"'
+                 | '\'': '\''
+                 | _: abort_at_loc (Loc s i) "Expected an escapable character, but found \'{char_repr c}\'.",
+               buffer_add_char buf value_char;
+               iter s (int_add i 1) len closer buf
+             | Greater_than | Equal: abort_at_loc (Loc s i) "Expected an escapable character, but reached end of program.")))
+    | Greater_than | Equal: abort_at_loc (Loc s i) "String literal left unfinished \'\"\'",
+  let buf = buffer_create T,
+  iter s i len closer buf,
+
+loc_of_expr = fun expr:
+  match expr
+  | Wildcard loc | Name _ loc | Data _ loc | Integer _ loc | String _ _ loc: loc
+  | Char _ loc | Fun _ _ loc | Let _ _ _ loc | Seq _ _ loc | Call _ _ loc | Match _ _ loc: loc,
+
+skip_whitespace = fun s i len:
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match c
+     | ' ' | '\t' | '\n': skip_whitespace s (int_add i 1) len
+     | _: i)
+  | Greater_than | Equal: i,
+
+parse_symbol_assume_first_char = fun s i len:
+  let buf = buffer_create T,
+  buffer_add_char buf (string_get s i);
+  parse_rest_of_symbol s (int_add i 1) len buf,
+
+parse_symbol = fun s i len:
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match c
+     | range 'a' 'z': parse_symbol_assume_first_char s i len
+     | _: abort_at_loc (Loc s i) "Expected symbol, but reached end of program.")
+  | Greater_than | Equal: abort_at_loc (Loc s i) "Expected symbol, but reached end of program.",
+
+expect_name_of_symbol = fun s i symbol:
+  match symbol
+  | Name name: name
+  | Keyword_fun: abort_at_loc (Loc s i) "Expected name, but got keyword \'fun\'."
+  | Keyword_let: abort_at_loc (Loc s i) "Expected name, but got keyword \'let\'."
+  | Keyword_match: abort_at_loc (Loc s i) "Expected name, but got keyword \'match\'.",
+
+parse_args = fun s i len acc:
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match c
+     | range 'a' 'z':
+       let T i symbol = parse_symbol_assume_first_char s i,
+       let name = expect_name_of_symbol s i symbol,
+       let i = skip_whitespace s i len,
+       parse_args s i len (Cons name acc)
+     | ':': T i (list_rev acc)
+     | _: abort_at_loc (Loc s i) "Expected name, but found unexpected character \'{char_repr c}\'.")
+  | Greater_than | Equal: abort_at_loc (Loc s i) "Expected name, but the program ended.",
+
+factors_to_expr = fun factors loc:
+  match factors
+  | Empty: abort_at_loc loc "BUG: Empty list of factors."
+  | Cons factor args:
+    (match args
+     | Empty: factor
+     | Cons _ _: Call fun_ args loc),
+
+skip_exact_char = fun s i len char:
+  match int_compare i len
+  | Less_than:
+    let c = string_get s i,
+    (match char_equal char c
+     | True: int_add i 1
+     | False: abort_at_loc (Loc s i) "Expected \'{char_repr char}\', but found \'{char_repr c}\'")
+  | Greater_than | Equal: abort_at_loc (Loc s i) "Expected \'{char_repr char}\', but reached end of program.",
+
 parse_factor = fun s i len:
   let loc = Loc s i,
   match int_compare i len
@@ -428,7 +598,7 @@ evaluate_expr = fun context expr:
       | Vstring s: buffer_add_string buf s
       | Vchar c: buffer_add_char buf c
       | Vdata _ | Vinteger _ | Vfun _ _ | Vcall _ _ | Vbuiltin_fun _ | Varray _:
-        let loc = loc_of_expr,
+        let loc = loc_of_expr expr,
         abort_at_lco loc "Attempted to interpolate value that is neither a string nor a character.";
         buffer_add_string buf section);
     Vstring (buffer_contents buf)
