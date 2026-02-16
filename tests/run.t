@@ -180,14 +180,46 @@ Top level functions can be recursive, both self and mutual.
   >   match int_compare x 0
   >   | Greater_than: parity (int_subtract x 1)
   >   | Less_than | Equal: print "odd\n",
+  > factorial = fun x:
+  >   match int_compare x 1
+  >   | Greater_than: int_add (factorial (int_subtract x 1)) (factorial (int_subtract x 2))
+  >   | Less_than | Equal: 1,
+  > power = fun x exp:
+  >   match int_compare exp 1
+  >   | Greater_than: int_multiply x (power x (int_subtract exp 1))
+  >   | Less_than | Equal: 1,
   > main = fun T:
   >   parity 1;
   >   parity 2;
-  >   parity 3
+  >   parity 3;
+  >   print "{int_to_string (factorial 1)}\n";
+  >   print "{int_to_string (factorial 2)}\n";
+  >   print "{int_to_string (factorial 3)}\n";
+  >   print "{int_to_string (factorial 4)}\n";
+  >   print "{int_to_string (factorial 5)}\n";
+  >   print "{int_to_string (factorial 6)}\n";
+  >   print "{int_to_string (power 2 1)}\n";
+  >   print "{int_to_string (power 2 3)}\n";
+  >   print "{int_to_string (power 2 4)}\n";
+  >   print "{int_to_string (power 2 5)}\n";
+  >   print "{int_to_string (power 2 6)}\n";
+  >   print "{int_to_string (power 2 7)}\n"
   > .
   odd
   even
   odd
+  1
+  2
+  3
+  5
+  8
+  13
+  1
+  4
+  8
+  16
+  32
+  64
 
 STRING INTERPOLATION
 
