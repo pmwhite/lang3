@@ -169,6 +169,26 @@ Functions capture their lexical environment.
   > .
   1
 
+Top level functions can be recursive, both self and mutual.
+
+  $ run <<\.
+  > parity = fun x:
+  >   match int_compare x 0
+  >   | Greater_than: odd_parity (int_subtract x 1)
+  >   | Less_than | Equal: print "even\n",
+  > odd_parity = fun x:
+  >   match int_compare x 0
+  >   | Greater_than: parity (int_subtract x 1)
+  >   | Less_than | Equal: print "odd\n",
+  > main = fun T:
+  >   parity 1;
+  >   parity 2;
+  >   parity 3
+  > .
+  odd
+  even
+  odd
+
 STRING INTERPOLATION
 
 String literals can contain arbitrary sub-expressions, each of which must

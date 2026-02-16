@@ -646,11 +646,14 @@ type value =
   | Vinteger of int
   | Vstring of string
   | Vchar of char
-  | Vfun of value String_map.t * expr list * expr
+  | Vfun of local_context * expr list * expr
   | Vcall of value * value list
   | Vbuiltin_fun of (value list -> value)
   | Varray of value array
   | Vbuffer of Buffer.t
+
+and global_context = value String_map.t
+and local_context = value String_map.t
 
 (* Abstract values like arrays do not have equivalent expressions, so this
    function cannot be trusted; it is mainly for debugging and printing purposes. *)
@@ -660,7 +663,7 @@ let rec value_to_expr value =
   | Vinteger i -> Integer (i, Noloc)
   | Vstring s -> String (s, [], Noloc)
   | Vchar c -> Char (c, Noloc)
-  | Vfun (_env, args, body) -> Fun (args, body, Noloc)
+  | Vfun (_local, args, body) -> Fun (args, body, Noloc)
   | Vcall (name, args) -> Call (value_to_expr name, List.map args ~f:value_to_expr, Noloc)
   | Vbuiltin_fun _ -> Data ("Abstract_builtin_fun", Noloc)
   | Varray _ -> Data ("Abstract_array", Noloc)
@@ -797,6 +800,13 @@ let initial_context argv : value String_map.t =
             let b, args = expect_int args in
             let () = expect_no_more_args args in
             Vinteger (a + b)) )
+    ; ( "int_subtract"
+      , Vbuiltin_fun
+          (fun args ->
+            let a, args = expect_int args in
+            let b, args = expect_int args in
+            let () = expect_no_more_args args in
+            Vinteger (a - b)) )
     ; ( "int_compare"
       , Vbuiltin_fun
           (fun args ->
@@ -858,20 +868,23 @@ let value_to_string value =
 
 let print_value value = printfn "%s" (value_to_string value)
 
-let rec evaluate_expr context expr =
+let rec evaluate_expr (global : global_context) (local : local_context) expr =
   match expr with
   | Wildcard loc -> abortfn loc "Wildcard expression used as value."
   | Name (name, loc) ->
-    (match String_map.find_opt name context with
-     | None -> abortfn loc "Name '%s' is not defined." name
-     | Some value -> value)
+    (match String_map.find_opt name local with
+     | Some value -> value
+     | None ->
+       (match String_map.find_opt name global with
+        | None -> abortfn loc "Name '%s' is not defined." name
+        | Some value -> value))
   | Data (name, _) -> Vdata name
   | Integer (i, _) -> Vinteger i
   | String (section, sections, _) ->
     let buf = Buffer.create (String.length section) in
     Buffer.add_string buf section;
     List.iter sections ~f:(fun (expr, section) ->
-      let value = evaluate_expr context expr in
+      let value = evaluate_expr global local expr in
       (match value with
        | Vstring s -> Buffer.add_string buf s
        | Vchar c -> Buffer.add_char buf c
@@ -886,75 +899,76 @@ let rec evaluate_expr context expr =
     Vstring (Buffer.contents buf)
   | Char (value, _) -> Vchar value
   | Range (_, _, loc) -> abortfn loc "Range expressions are only allowed in patterns."
-  | Fun (args, body, _) -> Vfun (context, args, body)
-  | Let (pattern, expr, body, _) -> evaluate_match context expr [ [ pattern ], body ]
-  | Seq (a, b, loc) -> evaluate_match context a [ [ Data ("T", loc) ], b ]
-  | Match (expr, cases, _) -> evaluate_match context expr cases
+  | Fun (args, body, _) -> Vfun (local, args, body)
+  | Let (pattern, expr, body, _) -> evaluate_match global local expr [ [ pattern ], body ]
+  | Seq (a, b, loc) -> evaluate_match global local a [ [ Data ("T", loc) ], b ]
+  | Match (expr, cases, _) -> evaluate_match global local expr cases
   | Call (fun_, args, loc) ->
-    let fun_ = evaluate_expr context fun_ in
-    let args = List.map args ~f:(fun arg -> evaluate_expr context arg) in
+    let fun_ = evaluate_expr global local fun_ in
+    let args = List.map args ~f:(fun arg -> evaluate_expr global local arg) in
     (match fun_ with
      | Vdata _ -> Vcall (fun_, args)
      | Vinteger _ -> abortfn loc "Attempted to call an integer value."
      | Vstring _ -> abortfn loc "Attempted to call a string value."
      | Vchar _ -> abortfn loc "Attempted to call a char value."
      | Vcall _ -> abortfn loc "Attempted to call a call value."
-     | Vfun (fun_context, arg_patterns, body) ->
-       evaluate_call fun_context arg_patterns args body
+     | Vfun (fun_local, arg_patterns, body) ->
+       evaluate_call global fun_local arg_patterns args body
      | Vbuiltin_fun f -> f args
      | Varray _ -> abortfn loc "Attempted to call an array value."
      | Vbuffer _ -> abortfn loc "Attempted to call a buffer value.")
 
-and evaluate_call context arg_patterns args body =
+and evaluate_call global local arg_patterns args body =
   match arg_patterns with
   | [] ->
     (match args with
-     | [] -> evaluate_expr context body
+     | [] -> evaluate_expr global local body
      | _ :: _ -> abortfn Noloc "Too many arguments.")
   | arg_pattern :: arg_patterns ->
     (match args with
      | [] -> abortfn Noloc "Not enough args."
      | arg :: args ->
-       (match evaluate_pattern context arg_pattern arg with
+       (match evaluate_pattern global local arg_pattern arg with
         | None -> abortfn Noloc "No patterns matched value."
-        | Some context -> evaluate_call context arg_patterns args body))
+        | Some local -> evaluate_call global local arg_patterns args body))
 
-and evaluate_match context expr cases =
-  let value = evaluate_expr context expr in
+and evaluate_match global local expr cases =
+  let value = evaluate_expr global local expr in
   match
     List.find_map cases ~f:(fun (patterns, body) ->
       match
-        List.find_map patterns ~f:(fun pattern -> evaluate_pattern context pattern value)
+        List.find_map patterns ~f:(fun pattern ->
+          evaluate_pattern global local pattern value)
       with
       | None -> None
-      | Some context -> Some (evaluate_expr context body))
+      | Some local -> Some (evaluate_expr global local body))
   with
   | None ->
     let value = value_to_string value in
     abortfn (loc_of_expr expr) "No patterns matched value:\n%s" value
   | Some value -> value
 
-and evaluate_call_patterns context arg_patterns args =
+and evaluate_call_patterns global local arg_patterns args =
   match arg_patterns with
   | [] ->
     (match args with
-     | [] -> Some context
+     | [] -> Some local
      | _ :: _ -> None)
   | arg_pattern :: arg_patterns ->
     (match args with
      | [] -> None
      | arg :: args ->
-       (match evaluate_pattern context arg_pattern arg with
+       (match evaluate_pattern global local arg_pattern arg with
         | None -> None
-        | Some context -> evaluate_call_patterns context arg_patterns args))
+        | Some local -> evaluate_call_patterns global local arg_patterns args))
 
-and evaluate_pattern context pattern value =
+and evaluate_pattern global local pattern value =
   match pattern with
-  | Wildcard _ -> Some context
-  | Name (name, _) -> Some (String_map.add name value context)
+  | Wildcard _ -> Some local
+  | Name (name, _) -> Some (String_map.add name value local)
   | Data (name, _) ->
     (match value with
-     | Vdata vname -> if String.equal name vname then Some context else None
+     | Vdata vname -> if String.equal name vname then Some local else None
      | Vinteger _
      | Vstring _
      | Vchar _
@@ -965,7 +979,7 @@ and evaluate_pattern context pattern value =
      | Vbuffer _ -> None)
   | Integer (i, _) ->
     (match value with
-     | Vinteger vi -> if Int.equal i vi then Some context else None
+     | Vinteger vi -> if Int.equal i vi then Some local else None
      | Vdata _
      | Vstring _
      | Vchar _
@@ -975,13 +989,13 @@ and evaluate_pattern context pattern value =
      | Varray _
      | Vbuffer _ -> None)
   | Range (from_, to_, loc) ->
-    let from_v = evaluate_expr context from_ in
-    let to_v = evaluate_expr context to_ in
+    let from_v = evaluate_expr global local from_ in
+    let to_v = evaluate_expr global local to_ in
     (match from_v, to_v, value with
      | Vinteger a, Vinteger b, Vinteger x ->
        let lo = min a b in
        let hi = max a b in
-       if lo <= x && x <= hi then Some context else None
+       if lo <= x && x <= hi then Some local else None
      | ( Vinteger _
        , Vinteger _
        , ( Vdata _
@@ -998,7 +1012,7 @@ and evaluate_pattern context pattern value =
        let x = Char.code x in
        let lo = min a b in
        let hi = max a b in
-       if lo <= x && x <= hi then Some context else None
+       if lo <= x && x <= hi then Some local else None
      | ( Vchar _
        , Vchar _
        , ( Vdata _
@@ -1034,7 +1048,7 @@ and evaluate_pattern context pattern value =
     (match sections with
      | [] ->
        (match value with
-        | Vstring vstring -> if String.equal string vstring then Some context else None
+        | Vstring vstring -> if String.equal string vstring then Some local else None
         | Vdata _
         | Vinteger _
         | Vchar _
@@ -1046,7 +1060,7 @@ and evaluate_pattern context pattern value =
      | _ :: _ -> abortfn loc "Attempted to use interpolated string as pattern.")
   | Char (c, _) ->
     (match value with
-     | Vchar vc -> if Char.equal c vc then Some context else None
+     | Vchar vc -> if Char.equal c vc then Some local else None
      | Vdata _
      | Vinteger _
      | Vstring _
@@ -1062,7 +1076,7 @@ and evaluate_pattern context pattern value =
   | Call (fun_, args, _) ->
     (match value with
      | Vcall (vfun_, vargs) ->
-       evaluate_call_patterns context (fun_ :: args) (vfun_ :: vargs)
+       evaluate_call_patterns global local (fun_ :: args) (vfun_ :: vargs)
      | Vdata _
      | Vinteger _
      | Vchar _
@@ -1074,17 +1088,18 @@ and evaluate_pattern context pattern value =
   | Match (_, _, loc) -> abortfn loc "Attempted to use match expression as pattern."
 ;;
 
-let rec evaluate_program context definitions =
+let rec evaluate_program (global : global_context) definitions =
   match definitions with
-  | [] -> context
+  | [] -> global
   | (name, expr) :: tl ->
-    let value = evaluate_expr context expr in
-    let context =
-      if String_map.mem name context
+    let local = String_map.empty in
+    let value = evaluate_expr global local expr in
+    let global =
+      if String_map.mem name global
       then abortfn Noloc "Attempted to define top-level value '%s' a second time." name
-      else String_map.add name value context
+      else String_map.add name value global
     in
-    evaluate_program context tl
+    evaluate_program global tl
 ;;
 
 let () =
@@ -1120,7 +1135,7 @@ let () =
            Printf.printf "> %!";
            let line = read_line () in
            let parsed = parse_standalone_expr line in
-           let value = evaluate_expr String_map.empty parsed in
+           let value = evaluate_expr String_map.empty String_map.empty parsed in
            let buf = Buffer.create 1024 in
            format_expr buf 0 `Non_match (value_to_expr value);
            printfn "%s" (Buffer.contents buf)
@@ -1138,6 +1153,7 @@ let () =
          let (_ : value) =
            evaluate_expr
              context
+             String_map.empty
              (Let
                 ( Data ("T", Noloc)
                 , Call (Name ("main", Noloc), [ Data ("T", Noloc) ], Noloc)
