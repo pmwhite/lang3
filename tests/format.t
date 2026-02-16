@@ -96,16 +96,13 @@ functions go on the next line.
   
   b = fun x: fun y: x,
   
-  c =
-    fun x:
-      let y = 0,
-      y,
+  c = fun x:
+    let y = 0,
+    y,
   
-  d =
-    fun w x:
-      fun y:
-        let z = 0,
-        z
+  d = fun w x: fun y:
+    let z = 0,
+    z
 
 CALLS
 
