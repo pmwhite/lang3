@@ -142,6 +142,17 @@ pattern matching.
   Specifically this part: `| (fun x`
   [1]
 
+Functions capture their lexical environment.
+
+  $ run <<\.
+  > x = 1,
+  > f = fun y: x,
+  > main = fun T:
+  >   let x = 2,
+  >   print "{int_to_string (f T)}\n"
+  > .
+  1
+
 STRING INTERPOLATION
 
 String literals can contain arbitrary sub-expressions, each of which must

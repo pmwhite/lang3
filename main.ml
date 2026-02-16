@@ -622,7 +622,7 @@ type value =
   | Vinteger of int
   | Vstring of string
   | Vchar of char
-  | Vfun of expr list * expr
+  | Vfun of value String_map.t * expr list * expr
   | Vcall of value * value list
   | Vbuiltin_fun of (value list -> value)
   | Varray of value array
@@ -635,7 +635,7 @@ let rec value_to_expr value =
   | Vinteger i -> Integer (i, Noloc)
   | Vstring s -> String (s, [], Noloc)
   | Vchar c -> Char (c, Noloc)
-  | Vfun (args, body) -> Fun (args, body, Noloc)
+  | Vfun (_env, args, body) -> Fun (args, body, Noloc)
   | Vcall (name, args) -> Call (value_to_expr name, List.map args ~f:value_to_expr, Noloc)
   | Vbuiltin_fun _ -> Data ("Abstract_builtin_fun", Noloc)
   | Varray _ -> Data ("Abstract_array", Noloc)
@@ -768,7 +768,12 @@ let rec evaluate_expr context expr =
       (match value with
        | Vstring s -> Buffer.add_string buf s
        | Vchar c -> Buffer.add_char buf c
-       | Vdata _ | Vinteger _ | Vfun (_, _) | Vcall (_, _) | Vbuiltin_fun _ | Varray _ ->
+       | Vdata _
+       | Vinteger _
+       | Vfun _
+       | Vcall (_, _)
+       | Vbuiltin_fun _
+       | Varray _ ->
          let loc = loc_of_expr expr in
          abortfn
            loc
@@ -776,7 +781,7 @@ let rec evaluate_expr context expr =
       Buffer.add_string buf section);
     Vstring (Buffer.contents buf)
   | Char (value, _) -> Vchar value
-  | Fun (args, body, _) -> Vfun (args, body)
+  | Fun (args, body, _) -> Vfun (context, args, body)
   | Let (pattern, expr, body, _) -> evaluate_match context expr [ [ pattern ], body ]
   | Seq (a, b, loc) -> evaluate_match context a [ [ Data ("T", loc) ], b ]
   | Match (expr, cases, _) -> evaluate_match context expr cases
@@ -789,7 +794,8 @@ let rec evaluate_expr context expr =
      | Vstring _ -> abortfn loc "Attempted to call a string value."
      | Vchar _ -> abortfn loc "Attempted to call a char value."
      | Vcall _ -> abortfn loc "Attempted to call a call value."
-     | Vfun (arg_patterns, body) -> evaluate_call context arg_patterns args body
+     | Vfun (fun_context, arg_patterns, body) ->
+       evaluate_call fun_context arg_patterns args body
      | Vbuiltin_fun f -> f args
      | Varray _ -> abortfn loc "Attempted to call an array value.")
 
