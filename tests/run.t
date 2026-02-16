@@ -82,6 +82,22 @@ won't match.
   > .
   second pattern
 
+Characters and integers can be matched with range patterns, which match if the
+value is greater or equal to the lower bound but lesser or equal to the upper
+bound.
+
+  $ run <<\.
+  > main = fun T: 
+  >   (match 'a'
+  >   | range 'a' 'z': print "first pattern\n"
+  >   | _: print "second pattern\n");
+  >   match 0
+  >   | range 1 2: print "first pattern\n"
+  >   | _: print "second pattern\n"
+  > .
+  first pattern
+  second pattern
+
 FUNCTIONS
 
 Functions in Alpaca accept any number of arguments, and produce one output. All

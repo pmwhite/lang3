@@ -44,6 +44,7 @@ let symbol_of_string s =
   | "fun" -> `Keyword_fun
   | "let" -> `Keyword_let
   | "match" -> `Keyword_match
+  | "range" -> `Keyword_range
   | _ -> `Name s
 ;;
 
@@ -182,6 +183,7 @@ type expr =
   | Integer of int * loc
   | String of string * (expr * string) list * loc
   | Char of char * loc
+  | Range of expr * expr * loc
   | Fun of expr list * expr * loc
   | Let of expr * expr * expr * loc
   | Seq of expr * expr * loc
@@ -197,6 +199,7 @@ let loc_of_expr = function
   | Integer (_, loc)
   | String (_, _, loc)
   | Char (_, loc)
+  | Range (_, _, loc)
   | Fun (_, _, loc)
   | Let (_, _, _, loc)
   | Seq (_, _, loc)
@@ -236,6 +239,7 @@ let expect_name_of_symbol s i symbol =
   | `Keyword_fun -> errorfn (Loc (s, i)) "Expected name, but got keyword 'fun'."
   | `Keyword_let -> errorfn (Loc (s, i)) "Expected name, but got keyword 'let'."
   | `Keyword_match -> errorfn (Loc (s, i)) "Expected name, but got keyword 'match'."
+  | `Keyword_range -> errorfn (Loc (s, i)) "Expected name, but got keyword 'range'."
 ;;
 
 let rec parse_args s i len acc =
@@ -305,7 +309,13 @@ let rec parse_factor s i len =
          let i, expr = parse_expr s i len in
          let i = skip_whitespace s i len in
          let i, cases = parse_cases s i len [] in
-         i, Match (expr, cases, loc))
+         i, Match (expr, cases, loc)
+       | `Keyword_range ->
+         let i = skip_whitespace s i len in
+         let i, from_ = parse_factor s i len in
+         let i = skip_whitespace s i len in
+         let i, to_ = parse_factor s i len in
+         i, Range (from_, to_, loc))
     | 'A' .. 'Z' ->
       let buf = Buffer.create 128 in
       Buffer.add_char buf c;
@@ -476,7 +486,7 @@ let rec format_indent buf indent =
 
 let rec is_multiline_expr expr =
   match expr with
-  | Wildcard _ | Name _ | Integer _ | String _ | Char _ | Data _ -> false
+  | Wildcard _ | Name _ | Integer _ | String _ | Char _ | Data _ | Range _ -> false
   | Let _ | Seq _ | Match _ -> true
   | Fun (_, body, _) -> is_multiline_expr body
   | Call (fun_, args, _) ->
@@ -485,7 +495,16 @@ let rec is_multiline_expr expr =
 
 let should_break_before expr =
   match expr with
-  | Wildcard _ | Name _ | Integer _ | String _ | Char _ | Data _ | Let _ | Seq _ | Match _
+  | Wildcard _
+  | Name _
+  | Integer _
+  | String _
+  | Char _
+  | Data _
+  | Range _
+  | Let _
+  | Seq _
+  | Match _
   | Call (_, _, _) -> is_multiline_expr expr
   | Fun (_, _, _) -> false
 ;;
@@ -533,6 +552,11 @@ let rec format_expr buf indent parent expr =
     Buffer.add_char buf '\'';
     format_char_contents buf c;
     Buffer.add_char buf '\''
+  | Range (from_, to_, _) ->
+    Buffer.add_string buf "range ";
+    format_factor buf indent `Non_match from_;
+    Buffer.add_char buf ' ';
+    format_factor buf indent `Non_match to_
   | Fun (args, body, _) ->
     Buffer.add_string buf "fun";
     List.iter args ~f:(fun arg ->
@@ -592,7 +616,7 @@ let rec format_expr buf indent parent expr =
 
 and format_factor buf indent parent expr =
   match expr with
-  | Wildcard _ | Name _ | Data (_, _) | Integer _ | String _ | Char _ ->
+  | Wildcard _ | Name _ | Data (_, _) | Integer _ | String _ | Char _ | Range _ ->
     format_expr buf indent parent expr
   | Fun _ | Let _ | Seq _ | Call _ | Match _ ->
     Buffer.add_char buf '(';
@@ -781,6 +805,7 @@ let rec evaluate_expr context expr =
       Buffer.add_string buf section);
     Vstring (Buffer.contents buf)
   | Char (value, _) -> Vchar value
+  | Range (_, _, loc) -> abortfn loc "Range expressions are only allowed in patterns."
   | Fun (args, body, _) -> Vfun (context, args, body)
   | Let (pattern, expr, body, _) -> evaluate_match context expr [ [ pattern ], body ]
   | Seq (a, b, loc) -> evaluate_match context a [ [ Data ("T", loc) ], b ]
@@ -856,6 +881,28 @@ and evaluate_pattern context pattern value =
      | Vinteger vi -> if Int.equal i vi then Some context else None
      | Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
        None)
+  | Range (from_, to_, loc) ->
+    let from_v = evaluate_expr context from_ in
+    let to_v = evaluate_expr context to_ in
+    (match from_v, to_v, value with
+     | Vinteger a, Vinteger b, Vinteger x ->
+       let lo = min a b in
+       let hi = max a b in
+       if lo <= x && x <= hi then Some context else None
+     | Vinteger _, Vinteger _, (Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _) ->
+       None
+     | Vchar a, Vchar b, Vchar x ->
+       let a = Char.code a in
+       let b = Char.code b in
+       let x = Char.code x in
+       let lo = min a b in
+       let hi = max a b in
+       if lo <= x && x <= hi then Some context else None
+     | Vchar _, Vchar _, (Vdata _ | Vinteger _ | Vstring _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _) ->
+       None
+     | (Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _), _, _
+     | _, (Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _), _ ->
+       abortfn loc "Range pattern bounds must be both integers or both characters.")
   | String (string, sections, loc) ->
     (match sections with
      | [] ->
