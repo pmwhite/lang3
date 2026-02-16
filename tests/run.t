@@ -257,16 +257,17 @@ can accessed by index.
   number of command-line arguments: 3
   command-line arguments: temp arg1 arg2
 
-Integers can be compared and converted to strings.
+Integers can be added, compared, and converted to strings.
 
   $ run <<\.
   > f = fun x:
+  >   let against = int_add 1 2,
   >   let relation =
-  >     match int_compare x 3
+  >     match int_compare x against
   >     | Less_than: "less than"
   >     | Greater_than: "greater than"
   >     | Equal: "equal to",
-  >   print "{int_to_string x} is {relation} 3\n",
+  >   print "{int_to_string x} is {relation} {int_to_string against}\n",
   > main = fun T:
   >   f 2;
   >   f 3;

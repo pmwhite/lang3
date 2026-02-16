@@ -99,7 +99,7 @@ parse_string_section = fun s i len closer:
                iter s (int_add i 1) len closer buf
              | Greater_than | Equal: abort_at_loc (Loc s i) "Expected an escapable character, but reached end of program.")))
     | Greater_than | Equal: abort_at_loc (Loc s i) "String literal left unfinished \'\"\'",
-  let buf = buffer_create T,
+  let buf = buffer_create 128,
   iter s i len closer buf,
 
 loc_of_expr = fun expr:
@@ -117,7 +117,7 @@ skip_whitespace = fun s i len:
   | Greater_than | Equal: i,
 
 parse_symbol_assume_first_char = fun s i len:
-  let buf = buffer_create T,
+  let buf = buffer_create 128,
   buffer_add_char buf (string_get s i);
   parse_rest_of_symbol s (int_add i 1) len buf,
 
@@ -205,7 +205,7 @@ parse_factor = fun s i len:
           let T i cases = parse_cases s i len Empty,
           T i (Match expr cases loc))
      | range 'A' 'Z':
-       let buf = buffer_create T,
+       let buf = buffer_create 128,
        buffer_add_char buf c;
        let T i data_name = parse_rest_of_data_name s (int_add i 1) len buf,
        T i (Data data_name loc)
@@ -576,7 +576,7 @@ initial_context = fun argv:
   result,
 
 value_to_string = fun value:
-  let buf = buffer_create T,
+  let buf = buffer_create 128,
   format_expr buf 0 Non_match (value_to_expr value);
   buffer_contents buf,
 
@@ -590,7 +590,7 @@ evaluate_expr = fun context expr:
   | Data name _: Vdata name
   | Integer i _: Vinteger i
   | String section sections _:
-    let buf = buffer_create T,
+    let buf = buffer_create 128,
     buffer_add_string buf section;
     list_iter section (fun (T expr section):
       let value = evaluate_expr context expr,
@@ -732,7 +732,7 @@ main = fun T:
           let filename = array_get argv 1,
           let contents = read_file filename,
           let parsed = parse_program contents,
-          let buf = buffer_create T,
+          let buf = buffer_create 128,
           format_definitions buf 0 parsed;
           print (buffer_contents buf)
         | _: abort "Too many arguments")
@@ -745,7 +745,7 @@ main = fun T:
             let line = read_line T,
             let parsed = parse_standalone_expr line,
             let value = evaluate_expr map_empty parsed,
-            let buf = buffer_create T,
+            let buf = buffer_create 128,
             format_expr buf 0 Non_match (value_to_expr value);
             print (buffer_contents buf);
             iter T,

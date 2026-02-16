@@ -790,6 +790,13 @@ let initial_context argv : value String_map.t =
             let value, args = expect_int args in
             let () = expect_no_more_args args in
             Vstring (Int.to_string value)) )
+    ; ( "int_add"
+      , Vbuiltin_fun
+          (fun args ->
+            let a, args = expect_int args in
+            let b, args = expect_int args in
+            let () = expect_no_more_args args in
+            Vinteger (a + b)) )
     ; ( "int_compare"
       , Vbuiltin_fun
           (fun args ->
