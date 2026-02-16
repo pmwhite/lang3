@@ -650,6 +650,7 @@ type value =
   | Vcall of value * value list
   | Vbuiltin_fun of (value list -> value)
   | Varray of value array
+  | Vbuffer of Buffer.t
 
 (* Abstract values like arrays do not have equivalent expressions, so this
    function cannot be trusted; it is mainly for debugging and printing purposes. *)
@@ -663,6 +664,7 @@ let rec value_to_expr value =
   | Vcall (name, args) -> Call (value_to_expr name, List.map args ~f:value_to_expr, Noloc)
   | Vbuiltin_fun _ -> Data ("Abstract_builtin_fun", Noloc)
   | Varray _ -> Data ("Abstract_array", Noloc)
+  | Vbuffer _ -> Data ("Abstract_buffer", Noloc)
 ;;
 
 let expect_arg args =
@@ -674,24 +676,70 @@ let expect_arg args =
 let expect_array args =
   let arg, args = expect_arg args in
   match arg with
-  | Vdata _ | Vinteger _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ ->
-    abortfn Noloc "Expected array value."
+  | Vdata _
+  | Vinteger _
+  | Vstring _
+  | Vchar _
+  | Vfun _
+  | Vcall _
+  | Vbuiltin_fun _
+  | Vbuffer _ -> abortfn Noloc "Expected array value."
   | Varray array -> array, args
+;;
+
+let expect_buffer args =
+  let arg, args = expect_arg args in
+  match arg with
+  | Vdata _
+  | Vinteger _
+  | Vstring _
+  | Vchar _
+  | Vfun _
+  | Vcall _
+  | Vbuiltin_fun _
+  | Varray _ -> abortfn Noloc "Expected buffer value."
+  | Vbuffer b -> b, args
+;;
+
+let expect_char args =
+  let arg, args = expect_arg args in
+  match arg with
+  | Vdata _
+  | Vinteger _
+  | Vstring _
+  | Vfun _
+  | Vcall _
+  | Vbuiltin_fun _
+  | Varray _
+  | Vbuffer _ -> abortfn Noloc "Expected char value."
+  | Vchar c -> c, args
 ;;
 
 let expect_int args =
   let arg, args = expect_arg args in
   match arg with
-  | Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
-    abortfn Noloc "Expected int value."
+  | Vdata _
+  | Vstring _
+  | Vchar _
+  | Vfun _
+  | Vcall _
+  | Vbuiltin_fun _
+  | Varray _
+  | Vbuffer _ -> abortfn Noloc "Expected int value."
   | Vinteger int -> int, args
 ;;
 
 let expect_string args =
   let arg, args = expect_arg args in
   match arg with
-  | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
-    abortfn Noloc "Expected array value."
+  | Vdata _
+  | Vinteger _
+  | Vchar _
+  | Vfun _
+  | Vcall _
+  | Vbuiltin_fun _
+  | Varray _
+  | Vbuffer _ -> abortfn Noloc "Expected array value."
   | Vstring value -> value, args
 ;;
 
@@ -764,6 +812,34 @@ let initial_context argv : value String_map.t =
             let index, args = expect_int args in
             let () = expect_no_more_args args in
             Vchar string.[index]) )
+    ; ( "buffer_create"
+      , Vbuiltin_fun
+          (fun args ->
+            let n, args = expect_int args in
+            let () = expect_no_more_args args in
+            Vbuffer (Buffer.create n)) )
+    ; ( "buffer_add_char"
+      , Vbuiltin_fun
+          (fun args ->
+            let b, args = expect_buffer args in
+            let c, args = expect_char args in
+            let () = expect_no_more_args args in
+            Buffer.add_char b c;
+            Vdata "T") )
+    ; ( "buffer_add_string"
+      , Vbuiltin_fun
+          (fun args ->
+            let b, args = expect_buffer args in
+            let s, args = expect_string args in
+            let () = expect_no_more_args args in
+            Buffer.add_string b s;
+            Vdata "T") )
+    ; ( "buffer_contents"
+      , Vbuiltin_fun
+          (fun args ->
+            let b, args = expect_buffer args in
+            let () = expect_no_more_args args in
+            Vstring (Buffer.contents b)) )
     ]
 ;;
 
@@ -792,12 +868,9 @@ let rec evaluate_expr context expr =
       (match value with
        | Vstring s -> Buffer.add_string buf s
        | Vchar c -> Buffer.add_char buf c
-       | Vdata _
-       | Vinteger _
-       | Vfun _
+       | Vdata _ | Vinteger _ | Vfun _
        | Vcall (_, _)
-       | Vbuiltin_fun _
-       | Varray _ ->
+       | Vbuiltin_fun _ | Varray _ | Vbuffer _ ->
          let loc = loc_of_expr expr in
          abortfn
            loc
@@ -822,7 +895,8 @@ let rec evaluate_expr context expr =
      | Vfun (fun_context, arg_patterns, body) ->
        evaluate_call fun_context arg_patterns args body
      | Vbuiltin_fun f -> f args
-     | Varray _ -> abortfn loc "Attempted to call an array value.")
+     | Varray _ -> abortfn loc "Attempted to call an array value."
+     | Vbuffer _ -> abortfn loc "Attempted to call a buffer value.")
 
 and evaluate_call context arg_patterns args body =
   match arg_patterns with
@@ -874,13 +948,25 @@ and evaluate_pattern context pattern value =
   | Data (name, _) ->
     (match value with
      | Vdata vname -> if String.equal name vname then Some context else None
-     | Vinteger _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
-       None)
+     | Vinteger _
+     | Vstring _
+     | Vchar _
+     | Vfun _
+     | Vcall _
+     | Vbuiltin_fun _
+     | Varray _
+     | Vbuffer _ -> None)
   | Integer (i, _) ->
     (match value with
      | Vinteger vi -> if Int.equal i vi then Some context else None
-     | Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
-       None)
+     | Vdata _
+     | Vstring _
+     | Vchar _
+     | Vfun _
+     | Vcall _
+     | Vbuiltin_fun _
+     | Varray _
+     | Vbuffer _ -> None)
   | Range (from_, to_, loc) ->
     let from_v = evaluate_expr context from_ in
     let to_v = evaluate_expr context to_ in
@@ -889,8 +975,16 @@ and evaluate_pattern context pattern value =
        let lo = min a b in
        let hi = max a b in
        if lo <= x && x <= hi then Some context else None
-     | Vinteger _, Vinteger _, (Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _) ->
-       None
+     | ( Vinteger _
+       , Vinteger _
+       , ( Vdata _
+         | Vstring _
+         | Vchar _
+         | Vfun _
+         | Vcall _
+         | Vbuiltin_fun _
+         | Varray _
+         | Vbuffer _ ) ) -> None
      | Vchar a, Vchar b, Vchar x ->
        let a = Char.code a in
        let b = Char.code b in
@@ -898,24 +992,62 @@ and evaluate_pattern context pattern value =
        let lo = min a b in
        let hi = max a b in
        if lo <= x && x <= hi then Some context else None
-     | Vchar _, Vchar _, (Vdata _ | Vinteger _ | Vstring _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _) ->
-       None
-     | (Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _), _, _
-     | _, (Vdata _ | Vstring _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _), _ ->
+     | ( Vchar _
+       , Vchar _
+       , ( Vdata _
+         | Vinteger _
+         | Vstring _
+         | Vfun _
+         | Vcall _
+         | Vbuiltin_fun _
+         | Varray _
+         | Vbuffer _ ) ) -> None
+     | ( ( Vdata _
+         | Vstring _
+         | Vchar _
+         | Vfun _
+         | Vcall _
+         | Vbuiltin_fun _
+         | Varray _
+         | Vbuffer _ )
+       , _
+       , _ )
+     | ( _
+       , ( Vdata _
+         | Vstring _
+         | Vchar _
+         | Vfun _
+         | Vcall _
+         | Vbuiltin_fun _
+         | Varray _
+         | Vbuffer _ )
+       , _ ) ->
        abortfn loc "Range pattern bounds must be both integers or both characters.")
   | String (string, sections, loc) ->
     (match sections with
      | [] ->
        (match value with
         | Vstring vstring -> if String.equal string vstring then Some context else None
-        | Vdata _ | Vinteger _ | Vchar _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
-          None)
+        | Vdata _
+        | Vinteger _
+        | Vchar _
+        | Vfun _
+        | Vcall _
+        | Vbuiltin_fun _
+        | Varray _
+        | Vbuffer _ -> None)
      | _ :: _ -> abortfn loc "Attempted to use interpolated string as pattern.")
   | Char (c, _) ->
     (match value with
      | Vchar vc -> if Char.equal c vc then Some context else None
-     | Vdata _ | Vinteger _ | Vstring _ | Vfun _ | Vcall _ | Vbuiltin_fun _ | Varray _ ->
-       None)
+     | Vdata _
+     | Vinteger _
+     | Vstring _
+     | Vfun _
+     | Vcall _
+     | Vbuiltin_fun _
+     | Varray _
+     | Vbuffer _ -> None)
   | Fun (_, _, loc) -> abortfn loc "Attempted to use function expression as pattern."
   | Let (_, _, _, loc) -> abortfn loc "Attempted to use let expression as pattern."
   | Seq (_, _, loc) ->
@@ -924,8 +1056,14 @@ and evaluate_pattern context pattern value =
     (match value with
      | Vcall (vfun_, vargs) ->
        evaluate_call_patterns context (fun_ :: args) (vfun_ :: vargs)
-     | Vdata _ | Vinteger _ | Vchar _ | Vstring _ | Vfun _ | Vbuiltin_fun _ | Varray _ ->
-       None)
+     | Vdata _
+     | Vinteger _
+     | Vchar _
+     | Vstring _
+     | Vfun _
+     | Vbuiltin_fun _
+     | Varray _
+     | Vbuffer _ -> None)
   | Match (_, _, loc) -> abortfn loc "Attempted to use match expression as pattern."
 ;;
 

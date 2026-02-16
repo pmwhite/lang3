@@ -50,9 +50,9 @@ be raised.
 
 VALUES AND PATTERN MATCHING
 
-Values in Alpaca can be integers, strings, characters, functions, arrays, or
-"data". Data consists of a tag name and zero or more values; it's very similar
-to data in Haskell or OCaml.
+Values in Alpaca can be integers, strings, characters, functions, arrays,
+buffers, or "data". Data consists of a tag name and zero or more values; it's
+very similar to data in Haskell or OCaml.
 
 Values can be pattern matched in any context where variables can be introduced.
 This includes let-expressions, match-expressions, and functions. Here is an
@@ -308,3 +308,16 @@ unexpected condition is encountered.
   > .
   quitting
   [1]
+
+A buffer is an abstract value which represents a growable string. You can
+create it with an initial capacity, append some data to it, and then get its
+contents.
+
+  $ run <<\.
+  > main = fun T:
+  >   let b = buffer_create 1024,
+  >   buffer_add_char b 'h';
+  >   buffer_add_string b "i there\n";
+  >   print (buffer_contents b)
+  > .
+  hi there

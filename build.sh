@@ -1,5 +1,7 @@
 #!/bin/env sh
 
+eval $(opam env)
+
 set -eux
 
 warnings="-w A-40-42-70-30-44 -error-style short"
